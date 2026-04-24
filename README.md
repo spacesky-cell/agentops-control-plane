@@ -1,5 +1,7 @@
 # AgentOps Control Plane
 
+[中文文档](README_CN.md)
+
 AgentOps Control Plane is a small, vendor-neutral runtime gateway for AI agents.
 It does not try to replace Codex, Claude Code, LangGraph, or the OpenAI Agents SDK.
 It sits above agent backends and governs tool execution with policy, approval,
