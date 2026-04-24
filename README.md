@@ -1,0 +1,97 @@
+# AgentOps Control Plane
+
+AgentOps Control Plane is a small, vendor-neutral runtime gateway for AI agents.
+It does not try to replace Codex, Claude Code, LangGraph, or the OpenAI Agents SDK.
+It sits above agent backends and governs tool execution with policy, approval,
+audit logs, isolated workspaces, snapshots, and run reports.
+
+## Why This Exists
+
+Most agent demos show an LLM calling tools. Production agent systems need a
+control layer:
+
+- Which commands can the agent run?
+- Which files can it read or write?
+- Which actions require approval?
+- What exactly did the agent do?
+- Can we replay or audit a run after something goes wrong?
+- Can multiple agent backends use one shared governance layer?
+
+This project is a portfolio-grade MVP for those concerns.
+
+## Features
+
+- Isolated per-run workspaces copied from a source directory.
+- Policy engine for file, patch, and shell command tool calls.
+- Human-approval queue with an auto-approval mode for demos.
+- SQLite audit log for runs, events, decisions, and approvals.
+- Workspace snapshots before and after execution.
+- Scripted agent adapter for deterministic demos and tests.
+- HTML/JSON run export.
+- Small local web UI for browsing runs and traces.
+- Standard-library implementation; no runtime dependencies.
+
+## Quick Start
+
+```powershell
+cd E:\ClaudeCode\agentops-control-plane
+python -m agentops_control_plane run-script `
+  --plan examples\scripted_fix_agent.json `
+  --source examples\sample_repo `
+  --auto-approve
+```
+
+List runs:
+
+```powershell
+python -m agentops_control_plane runs
+```
+
+Show a run:
+
+```powershell
+python -m agentops_control_plane show <run_id>
+```
+
+Resume a run after approving a pending action:
+
+```powershell
+python -m agentops_control_plane approve <approval_id> --approver reviewer
+python -m agentops_control_plane resume-script <run_id> `
+  --plan examples\scripted_fix_agent.json `
+  --approver reviewer
+```
+
+Export a report:
+
+```powershell
+python -m agentops_control_plane export <run_id> --format html --out report.html
+```
+
+Serve the local dashboard:
+
+```powershell
+python -m agentops_control_plane serve --port 8765
+```
+
+## Demo Scenario
+
+The example agent fixes a bug in `examples/sample_repo/math_utils.py`.
+It runs inside a copied workspace, not against the original source directory.
+The write operation is a medium-risk action, so it requires approval unless
+`--auto-approve` is used.
+
+## Project Shape
+
+```text
+Agent backend -> Gateway -> Policy -> Tools -> Isolated workspace
+                          -> Audit store
+                          -> Approval queue
+                          -> Snapshots/reports
+```
+
+## Resume-Ready Summary
+
+Built a vendor-neutral AgentOps control plane for AI agents with isolated
+workspaces, policy-based tool execution, approval gates, command/file audit
+logs, snapshots, trace export, and deterministic evaluation demos.

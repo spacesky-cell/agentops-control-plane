@@ -1,0 +1,17 @@
+.agentops/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.venv/
+node_modules/
+coverage/
+*.log
+demo-report.*
+report.*
+.env
+.env.*

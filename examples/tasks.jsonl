@@ -1,0 +1,2 @@
+{"name":"fix_add_bug","task":"Fix the failing unit test in the sample repo.","source":"examples/sample_repo","plan":"examples/scripted_fix_agent.json","expected_status":"success"}
+

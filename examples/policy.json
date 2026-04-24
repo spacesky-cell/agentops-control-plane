@@ -1,0 +1,40 @@
+{
+  "command_allow_prefixes": [
+    "python -m unittest",
+    "python -m pytest",
+    "pytest",
+    "git diff",
+    "git status",
+    "npm test",
+    "pnpm test",
+    "pnpm run test"
+  ],
+  "command_deny_contains": [
+    "rm -rf",
+    "remove-item",
+    " del ",
+    "format ",
+    "shutdown",
+    "git push",
+    "git reset --hard",
+    "curl ",
+    "wget ",
+    "invoke-webrequest"
+  ],
+  "protected_globs": [
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "**/*secret*",
+    "**/*token*",
+    "**/id_rsa",
+    ".git/**"
+  ],
+  "write_requires_approval": true,
+  "patch_requires_approval": true,
+  "unknown_command_requires_approval": true,
+  "max_command_seconds": 30,
+  "max_output_chars": 8000
+}
+
