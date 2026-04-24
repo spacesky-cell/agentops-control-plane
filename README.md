@@ -36,7 +36,8 @@ This project is a portfolio-grade MVP for those concerns.
 ## Quick Start
 
 ```powershell
-cd E:\ClaudeCode\agentops-control-plane
+git clone https://github.com/spacesky-cell/agentops-control-plane.git
+cd agentops-control-plane
 python -m agentops_control_plane run-script `
   --plan examples\scripted_fix_agent.json `
   --source examples\sample_repo `
@@ -82,6 +83,16 @@ The example agent fixes a bug in `examples/sample_repo/math_utils.py`.
 It runs inside a copied workspace, not against the original source directory.
 The write operation is a medium-risk action, so it requires approval unless
 `--auto-approve` is used.
+
+## Public Repository Hygiene
+
+This repository intentionally includes source code, documentation, examples, and
+the `tests/` suite. Test source files are kept because they make the project
+verifiable for reviewers and recruiters.
+
+Generated runtime data is not committed. `.agentops/`, `.pytest_cache/`,
+`__pycache__/`, exported demo reports, local environment files, and logs are
+ignored by `.gitignore`.
 
 ## Project Shape
 
