@@ -4,7 +4,7 @@ import html
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .audit import ApprovalNotFoundError, AuditStore
 
@@ -58,7 +58,7 @@ class Dashboard:
                         self.send_response(404)
                         self.end_headers()
                         return
-                    self._redirect("/approvals")
+                    self._redirect(safe_return_to(parsed.query))
                     return
                 self.send_response(404)
                 self.end_headers()
@@ -139,40 +139,49 @@ def render_index(store: AuditStore) -> str:
 
 
 def render_approvals(store: AuditStore) -> str:
+    rows = render_approval_rows(store.list_approvals(), return_to="/approvals")
+    content = (
+        "<p><a href='/'>Back</a></p><h1>Approvals</h1>"
+        "<table><thead><tr><th>ID</th><th>Run</th><th>Status</th><th>Tool</th>"
+        "<th>Requested</th><th>Request</th></tr></thead><tbody>"
+        f"{rows or '<tr><td colspan=6>No approvals yet</td></tr>'}"
+        "</tbody></table>"
+    )
+    return render_shell("Approvals", content)
+
+
+def render_approval_rows(approvals: list[dict[str, object]], return_to: str) -> str:
     rows = []
-    for approval in store.list_approvals():
+    for approval in approvals:
         payload = html.escape(json.dumps(approval["payload"], ensure_ascii=False, indent=2))
-        run_id = html.escape(approval["run_id"])
-        actions = render_approval_actions(int(approval["id"]), str(approval["status"]))
+        run_id = str(approval["run_id"])
+        escaped_run_id = html.escape(run_id)
+        actions = render_approval_actions(int(approval["id"]), str(approval["status"]), return_to)
         rows.append(
             "<tr>"
             f"<td>{approval['id']}</td>"
-            f"<td><a href='/runs/{run_id}'>{run_id}</a></td>"
+            f"<td><a href='/runs/{escaped_run_id}'>{escaped_run_id}</a></td>"
             f"<td>{html.escape(approval['status'])}</td>"
             f"<td>{html.escape(approval['tool_name'])}</td>"
             f"<td>{html.escape(approval['requested_at'])}</td>"
             f"<td>{html.escape(str(approval.get('reason') or ''))}<pre>{payload}</pre>{actions}</td>"
             "</tr>"
         )
-    content = (
-        "<p><a href='/'>Back</a></p><h1>Approvals</h1>"
-        "<table><thead><tr><th>ID</th><th>Run</th><th>Status</th><th>Tool</th>"
-        "<th>Requested</th><th>Request</th></tr></thead><tbody>"
-        f"{''.join(rows) or '<tr><td colspan=6>No approvals yet</td></tr>'}"
-        "</tbody></table>"
-    )
-    return render_shell("Approvals", content)
+    return "".join(rows)
 
 
-def render_approval_actions(approval_id: int, status: str) -> str:
+def render_approval_actions(approval_id: int, status: str, return_to: str) -> str:
     if status != "pending":
         return ""
+    escaped_return_to = html.escape(return_to, quote=True)
     return (
         "<div>"
-        f"<form method='post' action='/approvals/{approval_id}/approve' style='display:inline'>"
+        f"<form method='post' action='/approvals/{approval_id}/approve?return_to={escaped_return_to}' "
+        "style='display:inline'>"
         "<button type='submit'>Approve</button>"
         "</form> "
-        f"<form method='post' action='/approvals/{approval_id}/reject' style='display:inline'>"
+        f"<form method='post' action='/approvals/{approval_id}/reject?return_to={escaped_return_to}' "
+        "style='display:inline'>"
         "<button type='submit'>Reject</button>"
         "</form>"
         "</div>"
@@ -197,12 +206,20 @@ def render_run(store: AuditStore, run_id: str) -> str:
             "</tr>"
         )
     diff_rows = render_patch_diffs(events)
+    approval_rows = render_approval_rows(store.list_approvals(run_id), return_to=f"/runs/{run_id}")
+    approval_table = (
+        "<h2>Approvals</h2><table><thead><tr><th>ID</th><th>Run</th><th>Status</th><th>Tool</th>"
+        "<th>Requested</th><th>Request</th></tr></thead><tbody>"
+        f"{approval_rows or '<tr><td colspan=6>No approvals for this run</td></tr>'}"
+        "</tbody></table>"
+    )
     content = (
         f"<p><a href='/'>Back</a></p><h1>{html.escape(run_id)}</h1>"
         f"<p><strong>Status:</strong> {html.escape(run['status'])}</p>"
         f"<p><strong>Task:</strong> {html.escape(run['task'])}</p>"
         f"<p><strong>Workspace:</strong> {html.escape(run['workspace_path'])}</p>"
         f"{diff_rows}"
+        f"{approval_table}"
         "<h2>Events</h2><table><thead><tr><th>ID</th><th>Type</th><th>Tool</th>"
         "<th>Risk</th><th>Message</th></tr></thead><tbody>"
         f"{''.join(event_rows)}</tbody></table>"
@@ -239,6 +256,15 @@ def render_patch_diffs(events: list[dict[str, object]]) -> str:
         "<h2>Patch Diff</h2><table><thead><tr><th>Path</th><th>Old</th><th>New</th></tr></thead><tbody>"
         f"{''.join(rows)}</tbody></table>"
     )
+
+
+def safe_return_to(query: str) -> str:
+    requested = parse_qs(query).get("return_to", ["/approvals"])[0]
+    if requested == "/approvals":
+        return requested
+    if requested.startswith("/runs/run_"):
+        return requested
+    return "/approvals"
 
 
 def default_store(project_root: str | Path) -> AuditStore:

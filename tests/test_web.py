@@ -3,7 +3,7 @@ from http.server import ThreadingHTTPServer
 from threading import Thread
 
 from agentops_control_plane.audit import AuditStore
-from agentops_control_plane.web import Dashboard, render_approvals, render_index, render_run
+from agentops_control_plane.web import Dashboard, render_approvals, render_index, render_run, safe_return_to
 
 
 def test_index_links_to_approvals(tmp_path):
@@ -37,8 +37,8 @@ def test_approvals_page_lists_pending_requests(tmp_path):
     assert "patch_text" in html
     assert "math_utils.py" in html
     assert "return a + b" in html
-    assert f"action='/approvals/{approval_id}/approve'" in html
-    assert f"action='/approvals/{approval_id}/reject'" in html
+    assert f"action='/approvals/{approval_id}/approve?return_to=/approvals'" in html
+    assert f"action='/approvals/{approval_id}/reject?return_to=/approvals'" in html
 
 
 def test_run_page_shows_patch_diff_from_audit_events(tmp_path):
@@ -60,6 +60,33 @@ def test_run_page_shows_patch_diff_from_audit_events(tmp_path):
     assert "math_utils.py" in html
     assert "- return a - b" in html
     assert "+ return a + b" in html
+
+
+def test_run_page_lists_approvals_for_that_run(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    other_run_id = store.start_run("other run", "agent", tmp_path / "other")
+    approval_id = store.create_approval(
+        run_id,
+        "patch_text",
+        {"args": {"path": "math_utils.py"}, "request_fingerprint": "abc123"},
+        "Patch requires approval.",
+    )
+    store.create_approval(
+        other_run_id,
+        "patch_text",
+        {"args": {"path": "other.py"}, "request_fingerprint": "def456"},
+        "Other approval.",
+    )
+
+    html = render_run(store, run_id)
+
+    assert "Approvals" in html
+    assert "Patch requires approval." in html
+    assert "math_utils.py" in html
+    assert "other.py" not in html
+    assert f"action='/approvals/{approval_id}/approve?return_to=/runs/{run_id}'" in html
+    assert f"action='/approvals/{approval_id}/reject?return_to=/runs/{run_id}'" in html
 
 
 def test_dashboard_routes_approvals_page(tmp_path):
@@ -108,6 +135,33 @@ def test_dashboard_post_approves_pending_request(tmp_path):
     assert approval["approver"] == "dashboard"
 
 
+def test_dashboard_post_approves_from_run_page_and_redirects_back(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    approval_id = store.create_approval(
+        run_id,
+        "patch_text",
+        {"args": {"path": "math_utils.py"}, "request_fingerprint": "abc123"},
+        "Patch requires approval.",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(store).app())
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", f"/approvals/{approval_id}/approve?return_to=/runs/{run_id}")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    approval = store.list_approvals(run_id)[0]
+    assert response.status == 303
+    assert response.getheader("Location") == f"/runs/{run_id}"
+    assert approval["status"] == "approved"
+
+
 def test_dashboard_post_rejects_pending_request(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
@@ -151,3 +205,34 @@ def test_dashboard_post_unknown_approval_returns_not_found(tmp_path):
     thread.join(timeout=5)
     server.server_close()
     assert response.status == 404
+
+
+def test_dashboard_post_ignores_external_return_to(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    approval_id = store.create_approval(
+        run_id,
+        "patch_text",
+        {"args": {"path": "math_utils.py"}, "request_fingerprint": "abc123"},
+        "Patch requires approval.",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(store).app())
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", f"/approvals/{approval_id}/approve?return_to=https://example.com")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    assert response.status == 303
+    assert response.getheader("Location") == "/approvals"
+
+
+def test_safe_return_to_rejects_protocol_relative_paths():
+    assert safe_return_to("return_to=//example.com") == "/approvals"
+    assert safe_return_to("return_to=/runs/run_123") == "/runs/run_123"
+    assert safe_return_to("return_to=/runs/not-a-run-id") == "/approvals"
