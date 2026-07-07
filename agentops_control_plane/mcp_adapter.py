@@ -77,4 +77,58 @@ class McpPlanAdapter(AgentAdapter):
         approver: str = "human",
         auto_approve_remaining: bool = False,
     ) -> str:
-        raise NotImplementedError("MCP plan resume is not implemented yet.")
+        run = gateway.audit_store.get_run(run_id)
+        if not run:
+            raise ValueError(f"Run not found: {run_id}")
+        if run["status"] != "waiting_for_approval":
+            raise ValueError(f"Run is not waiting for approval: {run['status']}")
+
+        approvals = gateway.audit_store.list_approvals(run_id)
+        approved = [
+            item for item in approvals if item["status"] == "approved" and item["tool_name"]
+        ]
+        if not approved:
+            raise ValueError("No approved pending action found for this run.")
+
+        workspace = Path(run["workspace_path"])
+        executed_count = sum(
+            1 for event in gateway.audit_store.get_events(run_id) if event["type"] == "tool_executed"
+        )
+        status = "success"
+        for index, call in enumerate(self.tool_calls[executed_count:], start=executed_count + 1):
+            request = ToolRequest(
+                tool_name=call.name,
+                args=call.arguments,
+                requested_by=self.name,
+            )
+            gateway.audit_store.add_event(
+                run_id,
+                "mcp_tool_call",
+                f"Resumed MCP tool call {index}: {call.name}",
+                {"tool_call": {"name": call.name, "arguments": gateway._redact_args(call.arguments)}},
+                call.name,
+            )
+            preapproved_by = approver if index == executed_count + 1 else None
+            result = gateway.execute_tool(
+                run_id,
+                workspace,
+                request,
+                auto_approve=auto_approve_remaining,
+                preapproved_by=preapproved_by,
+            )
+            if result.status == ToolStatus.PENDING_APPROVAL:
+                if preapproved_by:
+                    raise ValueError(result.error or "No approved pending action found for this request.")
+                status = "waiting_for_approval"
+                break
+            if not result.ok:
+                status = "failed"
+                break
+            if request.tool_name == "run_command" and result.output.get("exit_code") != 0:
+                status = "failed"
+                break
+        if status == "waiting_for_approval":
+            gateway.pause_run(run_id, status)
+        else:
+            gateway.finish_run(run_id, workspace, status)
+        return run_id

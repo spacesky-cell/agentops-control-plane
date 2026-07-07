@@ -43,6 +43,29 @@ def make_mcp_plan(root: Path) -> Path:
     return plan
 
 
+def make_mcp_patch_plan(root: Path) -> Path:
+    plan = root / "mcp_patch_plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "name": "cli-mcp-patch-agent",
+                "tool_calls": [
+                    {
+                        "name": "patch_text",
+                        "arguments": {
+                            "path": "math_utils.py",
+                            "old": "return a + b",
+                            "new": "return a + b",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return plan
+
+
 def test_cli_uses_current_working_directory_for_agentops_home(tmp_path, monkeypatch, capsys):
     source = make_sample_repo(tmp_path)
     plan = make_plan(tmp_path)
@@ -79,3 +102,24 @@ def test_cli_runs_mcp_plan(tmp_path, monkeypatch, capsys):
     output = json.loads(capsys.readouterr().out)
     assert output["status"] == "success"
     assert output["run_id"].startswith("run_")
+
+
+def test_cli_resumes_mcp_plan_after_approval(tmp_path, monkeypatch, capsys):
+    source = make_sample_repo(tmp_path)
+    plan = make_mcp_patch_plan(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    cli.main(["run-mcp-plan", "--plan", str(plan), "--source", str(source)])
+    first_output = json.loads(capsys.readouterr().out)
+    assert first_output["status"] == "waiting_for_approval"
+
+    cli.main(["approvals", "--run-id", first_output["run_id"]])
+    approval = json.loads(capsys.readouterr().out)[0]
+    cli.main(["approve", str(approval["id"]), "--approver", "reviewer"])
+    capsys.readouterr()
+
+    cli.main(["resume-mcp-plan", first_output["run_id"], "--plan", str(plan), "--approver", "reviewer"])
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["run_id"] == first_output["run_id"]
+    assert output["status"] == "success"

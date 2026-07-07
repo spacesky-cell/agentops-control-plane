@@ -49,7 +49,9 @@ tests, and resume-flow reference behavior.
 `McpPlanAdapter` is a local MCP-style adapter skeleton. It reads a JSON plan of
 tool calls shaped as `{name, arguments}` entries and sends them through the
 same gateway. It is not a full MCP server implementation; it establishes the
-adapter-side contract that a real MCP transport can later feed.
+adapter-side contract that a real MCP transport can later feed. It also follows
+the same approval resume pattern as `ScriptedAgent`: the next pending tool call
+must match an approved request fingerprint before it can execute.
 
 ## PolicyEngine
 

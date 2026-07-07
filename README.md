@@ -65,6 +65,15 @@ python -m agentops_control_plane run-mcp-plan `
   --auto-approve
 ```
 
+MCP-style plans also support the same approval/resume flow:
+
+```powershell
+python -m agentops_control_plane approve <approval_id> --approver reviewer
+python -m agentops_control_plane resume-mcp-plan <run_id> `
+  --plan examples\mcp_tool_plan.json `
+  --approver reviewer
+```
+
 List runs:
 
 ```powershell

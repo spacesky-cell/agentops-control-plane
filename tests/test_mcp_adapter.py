@@ -90,6 +90,35 @@ def test_mcp_plan_adapter_pauses_for_approval(tmp_path):
     assert approvals[0]["payload"]["requested_by"] == "mcp-local-test"
 
 
+def test_mcp_plan_adapter_resumes_after_approval(tmp_path):
+    source = make_sample_repo(tmp_path)
+    plan = write_mcp_plan(
+        tmp_path / "mcp_plan.json",
+        [
+            {"name": "read_file", "arguments": {"path": "math_utils.py"}},
+            {
+                "name": "patch_text",
+                "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+            },
+            {"name": "run_command", "arguments": {"command": "python -m unittest -q"}},
+        ],
+    )
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    adapter = McpPlanAdapter.from_file(plan)
+
+    run_id = adapter.run(gateway, "approval mcp-style plan", source=source, auto_approve=False)
+    approval = gateway.audit_store.list_approvals(run_id)[0]
+    gateway.audit_store.decide_approval(approval["id"], "approved", "reviewer", "Looks safe")
+    adapter.resume(gateway, run_id, approver="reviewer")
+    run = gateway.audit_store.get_run(run_id)
+    approvals = gateway.audit_store.list_approvals(run_id)
+    events = gateway.audit_store.get_events(run_id)
+
+    assert run["status"] == "success"
+    assert approvals[0]["status"] == "consumed"
+    assert any(event["type"] == "approval_used" for event in events)
+
+
 def test_mcp_tool_call_event_redacts_content_arguments(tmp_path):
     source = tmp_path / "repo"
     source.mkdir()

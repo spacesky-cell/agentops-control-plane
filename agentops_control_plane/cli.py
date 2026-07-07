@@ -51,6 +51,12 @@ def main(argv: list[str] | None = None) -> None:
     resume_script.add_argument("--approver", default="human")
     resume_script.add_argument("--auto-approve-remaining", action="store_true")
 
+    resume_mcp_plan = sub.add_parser("resume-mcp-plan", help="Resume a waiting MCP-style plan run")
+    resume_mcp_plan.add_argument("run_id")
+    resume_mcp_plan.add_argument("--plan", required=True, help="Path to MCP-style tool-call JSON plan")
+    resume_mcp_plan.add_argument("--approver", default="human")
+    resume_mcp_plan.add_argument("--auto-approve-remaining", action="store_true")
+
     sub.add_parser("runs", help="List runs")
 
     show = sub.add_parser("show", help="Show a run trace")
@@ -123,6 +129,18 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "resume-script":
         agent = ScriptedAgent.from_file(args.plan)
         run_id = agent.resume(
+            gateway,
+            args.run_id,
+            approver=args.approver,
+            auto_approve_remaining=args.auto_approve_remaining,
+        )
+        run = store.get_run(run_id)
+        print(json.dumps({"run_id": run_id, "status": run["status"]}, indent=2))
+        return
+
+    if args.command == "resume-mcp-plan":
+        adapter = McpPlanAdapter.from_file(args.plan)
+        run_id = adapter.resume(
             gateway,
             args.run_id,
             approver=args.approver,
