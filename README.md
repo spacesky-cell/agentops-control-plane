@@ -30,8 +30,9 @@ This project is a portfolio-grade MVP for those concerns.
 - Workspace snapshots before and after execution.
 - Scripted agent adapter for deterministic demos and tests.
 - Local MCP-style tool-call plan adapter for exercising the same gateway contract.
+- JSON-lines stdio transport with MCP-compatible `tools/list` and `tools/call` methods.
 - HTML/JSON run export.
-- Small local web UI for browsing runs and traces.
+- Small local web UI for browsing runs, traces, approvals, and patch diffs.
 - Standard-library implementation; no runtime dependencies.
 
 ## Quick Start
@@ -80,9 +81,11 @@ Serve the thin JSON-lines stdio transport:
 python -m agentops_control_plane serve-mcp-stdio
 ```
 
-It accepts newline-delimited JSON requests with `run.start`, `tool.call`, and
-`run.finish` methods. This is a local transport skeleton for MCP-style tool
-calls, not a full MCP server handshake.
+It accepts newline-delimited JSON requests with `run.start`, `tools/list`,
+`tools/call`, `tool.call`, and `run.finish` methods. `tools/list` returns the
+available tool definitions and input schemas. `tools/call` wraps tool output as
+MCP-style content blocks with `isError`. `tool.call` remains available for the
+older internal response shape.
 
 List runs:
 

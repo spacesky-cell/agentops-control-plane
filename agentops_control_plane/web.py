@@ -22,6 +22,9 @@ class Dashboard:
                 if parsed.path == "/":
                     self._send_html(render_index(store))
                     return
+                if parsed.path == "/approvals":
+                    self._send_html(render_approvals(store))
+                    return
                 if parsed.path.startswith("/runs/"):
                     run_id = parsed.path.split("/", 2)[2]
                     self._send_html(render_run(store, run_id))
@@ -99,6 +102,7 @@ def render_index(store: AuditStore) -> str:
         )
     content = (
         "<h1>AgentOps Control Plane</h1>"
+        "<p><a href='/approvals'>Approvals</a></p>"
         "<table><thead><tr><th>Run</th><th>Status</th><th>Agent</th>"
         "<th>Started</th><th>Task</th></tr></thead><tbody>"
         f"{''.join(rows) or '<tr><td colspan=5>No runs yet</td></tr>'}"
@@ -107,12 +111,38 @@ def render_index(store: AuditStore) -> str:
     return render_shell("AgentOps Control Plane", content)
 
 
+def render_approvals(store: AuditStore) -> str:
+    rows = []
+    for approval in store.list_approvals():
+        payload = html.escape(json.dumps(approval["payload"], ensure_ascii=False, indent=2))
+        run_id = html.escape(approval["run_id"])
+        rows.append(
+            "<tr>"
+            f"<td>{approval['id']}</td>"
+            f"<td><a href='/runs/{run_id}'>{run_id}</a></td>"
+            f"<td>{html.escape(approval['status'])}</td>"
+            f"<td>{html.escape(approval['tool_name'])}</td>"
+            f"<td>{html.escape(approval['requested_at'])}</td>"
+            f"<td>{html.escape(str(approval.get('reason') or ''))}<pre>{payload}</pre></td>"
+            "</tr>"
+        )
+    content = (
+        "<p><a href='/'>Back</a></p><h1>Approvals</h1>"
+        "<table><thead><tr><th>ID</th><th>Run</th><th>Status</th><th>Tool</th>"
+        "<th>Requested</th><th>Request</th></tr></thead><tbody>"
+        f"{''.join(rows) or '<tr><td colspan=6>No approvals yet</td></tr>'}"
+        "</tbody></table>"
+    )
+    return render_shell("Approvals", content)
+
+
 def render_run(store: AuditStore, run_id: str) -> str:
     run = store.get_run(run_id)
     if not run:
         return render_shell("Run not found", "<h1>Run not found</h1>")
     event_rows = []
-    for event in store.get_events(run_id):
+    events = store.get_events(run_id)
+    for event in events:
         payload = html.escape(json.dumps(event["payload"], ensure_ascii=False, indent=2))
         event_rows.append(
             "<tr>"
@@ -123,16 +153,49 @@ def render_run(store: AuditStore, run_id: str) -> str:
             f"<td>{html.escape(event['message'])}<pre>{payload}</pre></td>"
             "</tr>"
         )
+    diff_rows = render_patch_diffs(events)
     content = (
         f"<p><a href='/'>Back</a></p><h1>{html.escape(run_id)}</h1>"
         f"<p><strong>Status:</strong> {html.escape(run['status'])}</p>"
         f"<p><strong>Task:</strong> {html.escape(run['task'])}</p>"
         f"<p><strong>Workspace:</strong> {html.escape(run['workspace_path'])}</p>"
+        f"{diff_rows}"
         "<h2>Events</h2><table><thead><tr><th>ID</th><th>Type</th><th>Tool</th>"
         "<th>Risk</th><th>Message</th></tr></thead><tbody>"
         f"{''.join(event_rows)}</tbody></table>"
     )
     return render_shell(f"Run {run_id}", content)
+
+
+def render_patch_diffs(events: list[dict[str, object]]) -> str:
+    rows = []
+    for event in events:
+        if event.get("tool_name") != "patch_text":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        args = payload.get("args")
+        if not isinstance(args, dict):
+            continue
+        path = args.get("path")
+        old = args.get("old")
+        new = args.get("new")
+        if not all(isinstance(value, str) for value in [path, old, new]):
+            continue
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(path)}</td>"
+            f"<td><pre>{html.escape('- ' + old)}</pre></td>"
+            f"<td><pre>{html.escape('+ ' + new)}</pre></td>"
+            "</tr>"
+        )
+    if not rows:
+        return ""
+    return (
+        "<h2>Patch Diff</h2><table><thead><tr><th>Path</th><th>Old</th><th>New</th></tr></thead><tbody>"
+        f"{''.join(rows)}</tbody></table>"
+    )
 
 
 def default_store(project_root: str | Path) -> AuditStore:

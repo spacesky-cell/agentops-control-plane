@@ -7,6 +7,7 @@ from typing import Any, TextIO
 
 from .gateway import RuntimeGateway
 from .models import ToolRequest
+from .tools import list_tool_definitions
 
 
 @dataclass
@@ -22,6 +23,10 @@ class McpStdioSession:
             params = request.get("params", {})
             if method == "run.start":
                 result = self._start(params)
+            elif method == "tools/list":
+                result = self._list_tools()
+            elif method == "tools/call":
+                result = self._call_tool_mcp(params)
             elif method == "tool.call":
                 result = self._call_tool(params)
             elif method == "run.finish":
@@ -42,6 +47,9 @@ class McpStdioSession:
         source = params.get("source")
         self.run_id, self.workspace = self.gateway.start_run(task, agent_name, source)
         return {"run_id": self.run_id, "status": "running", "workspace": str(self.workspace)}
+
+    def _list_tools(self) -> dict[str, Any]:
+        return {"tools": list_tool_definitions()}
 
     def _call_tool(self, params: dict[str, Any]) -> dict[str, Any]:
         if not self.run_id or self.workspace is None:
@@ -67,6 +75,25 @@ class McpStdioSession:
         if result.approval_id is not None:
             payload["approval_id"] = result.approval_id
         return payload
+
+    def _call_tool_mcp(self, params: dict[str, Any]) -> dict[str, Any]:
+        payload = self._call_tool(params)
+        if payload["ok"]:
+            return {
+                "content": [{"type": "text", "text": self._stringify_tool_output(payload["output"])}],
+                "isError": False,
+            }
+        message = payload.get("error") or payload["status"]
+        if payload.get("approval_id") is not None:
+            message = f"{payload['status']}: {message} approval_id={payload['approval_id']}"
+        else:
+            message = f"{payload['status']}: {message}"
+        return {"content": [{"type": "text", "text": message}], "isError": True}
+
+    def _stringify_tool_output(self, output: Any) -> str:
+        if isinstance(output, str):
+            return output
+        return json.dumps(output, ensure_ascii=False, indent=2)
 
     def _finish(self, params: dict[str, Any]) -> dict[str, Any]:
         if not self.run_id or self.workspace is None:
