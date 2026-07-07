@@ -74,6 +74,16 @@ python -m agentops_control_plane resume-mcp-plan <run_id> `
   --approver reviewer
 ```
 
+Serve the thin JSON-lines stdio transport:
+
+```powershell
+python -m agentops_control_plane serve-mcp-stdio
+```
+
+It accepts newline-delimited JSON requests with `run.start`, `tool.call`, and
+`run.finish` methods. This is a local transport skeleton for MCP-style tool
+calls, not a full MCP server handshake.
+
 List runs:
 
 ```powershell

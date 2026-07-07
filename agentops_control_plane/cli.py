@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .agents import ScriptedAgent
@@ -11,6 +12,7 @@ from .evaluator import run_eval
 from .exporter import export_html, export_json
 from .gateway import RuntimeGateway
 from .mcp_adapter import McpPlanAdapter
+from .mcp_stdio import serve_json_lines
 from .web import serve
 
 
@@ -83,6 +85,8 @@ def main(argv: list[str] | None = None) -> None:
     serve_cmd = sub.add_parser("serve", help="Serve the local dashboard")
     serve_cmd.add_argument("--host", default="127.0.0.1")
     serve_cmd.add_argument("--port", type=int, default=8765)
+
+    sub.add_parser("serve-mcp-stdio", help="Serve the local MCP-style JSON-lines stdio transport")
 
     init_policy = sub.add_parser("init-policy", help="Write a default policy JSON")
     init_policy.add_argument("--out", default="examples/policy.json")
@@ -189,6 +193,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "serve":
         print(f"Serving http://{args.host}:{args.port}")
         serve(store, args.host, args.port)
+        return
+
+    if args.command == "serve-mcp-stdio":
+        serve_json_lines(gateway, sys.stdin, sys.stdout)
         return
 
     if args.command == "eval":

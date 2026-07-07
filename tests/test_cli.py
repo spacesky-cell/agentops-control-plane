@@ -1,4 +1,6 @@
 import json
+import sys
+from io import StringIO
 from pathlib import Path
 
 from agentops_control_plane import cli
@@ -123,3 +125,45 @@ def test_cli_resumes_mcp_plan_after_approval(tmp_path, monkeypatch, capsys):
 
     assert output["run_id"] == first_output["run_id"]
     assert output["status"] == "success"
+
+
+def test_cli_serves_mcp_stdio_json_lines(tmp_path, monkeypatch):
+    source = make_sample_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    input_stream = StringIO(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "start",
+                        "method": "run.start",
+                        "params": {
+                            "task": "cli stdio read",
+                            "agent_name": "stdio-agent",
+                            "source": str(source),
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "read",
+                        "method": "tool.call",
+                        "params": {"name": "read_file", "arguments": {"path": "math_utils.py"}},
+                    }
+                ),
+            ]
+        )
+    )
+    output_stream = StringIO()
+    monkeypatch.setattr(sys, "stdin", input_stream)
+    monkeypatch.setattr(sys, "stdout", output_stream)
+
+    cli.main(["serve-mcp-stdio"])
+
+    responses = [json.loads(line) for line in output_stream.getvalue().splitlines()]
+    assert responses[0]["id"] == "start"
+    assert responses[0]["result"]["status"] == "running"
+    assert responses[1]["id"] == "read"
+    assert responses[1]["result"]["status"] == "ok"

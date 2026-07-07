@@ -53,6 +53,11 @@ adapter-side contract that a real MCP transport can later feed. It also follows
 the same approval resume pattern as `ScriptedAgent`: the next pending tool call
 must match an approved request fingerprint before it can execute.
 
+`serve-mcp-stdio` exposes a thin newline-delimited JSON transport with
+`run.start`, `tool.call`, and `run.finish` methods. It is useful for exercising
+the gateway through a process boundary while keeping the transport intentionally
+smaller than a complete MCP server handshake.
+
 ## PolicyEngine
 
 The current policy engine is JSON-configured and deterministic. It supports:
