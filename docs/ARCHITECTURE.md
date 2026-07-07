@@ -35,12 +35,17 @@ executes approved actions, and stores the result.
 The important design choice is that agent code does not call tools directly.
 This makes the system portable across agent backends.
 
+Runtime data is rooted at the CLI home directory. By default this is the
+current working directory, and callers can pass `--home <path>` before the
+subcommand to choose a different project home.
+
 ## PolicyEngine
 
 The current policy engine is JSON-configured and deterministic. It supports:
 
 - command allowlists
 - dangerous command deny patterns
+- shell control token denial before command execution
 - protected file patterns
 - approval requirements for writes and patches
 - max command runtime and output size
@@ -67,6 +72,10 @@ The MVP toolset is deliberately small:
 This is enough to demonstrate code-agent workflows while keeping risk and
 testability under control.
 
+Commands are parsed into argv and executed with `shell=False`. The policy layer
+rejects shell control tokens such as `&&`, `|`, redirection, and newlines before
+the executor runs the command.
+
 ## AuditStore
 
 The audit store is SQLite-backed and captures:
@@ -77,8 +86,11 @@ The audit store is SQLite-backed and captures:
 - agent steps
 - tool execution results
 - snapshot paths
+- schema version metadata
 
 This creates the evidence trail needed for debugging, compliance, and evals.
+Read-file and command-output payloads are summarized before they are written to
+the audit database. The tool result returned to the caller remains complete.
 
 ## Approval Flow
 
@@ -87,7 +99,9 @@ When a policy requires approval:
 1. The run pauses with status `waiting_for_approval`.
 2. A pending approval row is created.
 3. A reviewer approves or rejects it.
-4. `resume-script` continues the run from the pending step.
+4. `resume-script` matches the approval to the pending request fingerprint.
+5. The approval is marked `consumed` when the pre-approved action is executed.
+6. The run continues from the pending step.
 
 The resume flow is implemented for the scripted agent adapter and serves as the
 reference pattern for other agent backends.

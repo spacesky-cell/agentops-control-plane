@@ -13,17 +13,23 @@ from .gateway import RuntimeGateway
 from .web import serve
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-
 def build_gateway(args: argparse.Namespace) -> RuntimeGateway:
     policy = load_policy(getattr(args, "policy", None))
-    return RuntimeGateway.from_home(PROJECT_ROOT, policy)
+    return RuntimeGateway.from_home(get_home(args), policy)
+
+
+def get_home(args: argparse.Namespace) -> Path:
+    home = getattr(args, "home", None)
+    return Path(home).resolve() if home else Path.cwd()
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="agentops", description="AgentOps Control Plane")
     parser.add_argument("--policy", help="Path to policy JSON file")
+    parser.add_argument(
+        "--home",
+        help="Project home where .agentops runtime data is stored. Defaults to the current directory.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_script = sub.add_parser("run-script", help="Run a deterministic scripted agent")
@@ -75,8 +81,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "init-policy":
-        write_default_policy(PROJECT_ROOT / args.out)
-        print(f"Wrote {PROJECT_ROOT / args.out}")
+        output = get_home(args) / args.out
+        write_default_policy(output)
+        print(f"Wrote {output}")
         return
 
     gateway = build_gateway(args)

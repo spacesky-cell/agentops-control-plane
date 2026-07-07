@@ -33,6 +33,21 @@ class PolicyConfig:
             "invoke-webrequest",
         ]
     )
+    command_deny_shell_tokens: list[str] = field(
+        default_factory=lambda: [
+            "&&",
+            "&",
+            "||",
+            ";",
+            "|",
+            ">",
+            "<",
+            "`",
+            "$(",
+            "\n",
+            "\r",
+        ]
+    )
     protected_globs: list[str] = field(
         default_factory=lambda: [
             ".env",

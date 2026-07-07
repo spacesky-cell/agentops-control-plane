@@ -26,7 +26,7 @@ This project is a portfolio-grade MVP for those concerns.
 - Isolated per-run workspaces copied from a source directory.
 - Policy engine for file, patch, and shell command tool calls.
 - Human-approval queue with an auto-approval mode for demos.
-- SQLite audit log for runs, events, decisions, and approvals.
+- SQLite audit log for runs, events, decisions, approvals, and schema version.
 - Workspace snapshots before and after execution.
 - Scripted agent adapter for deterministic demos and tests.
 - HTML/JSON run export.
@@ -39,6 +39,17 @@ This project is a portfolio-grade MVP for those concerns.
 git clone https://github.com/spacesky-cell/agentops-control-plane.git
 cd agentops-control-plane
 python -m agentops_control_plane run-script `
+  --plan examples\scripted_fix_agent.json `
+  --source examples\sample_repo `
+  --auto-approve
+```
+
+Runtime data is stored under `.agentops/` in the current directory by default.
+Use `--home <path>` before the subcommand to store runs, workspaces, snapshots,
+and the SQLite audit database under a different project home:
+
+```powershell
+python -m agentops_control_plane --home .demo run-script `
   --plan examples\scripted_fix_agent.json `
   --source examples\sample_repo `
   --auto-approve
@@ -83,6 +94,14 @@ The example agent fixes a bug in `examples/sample_repo/math_utils.py`.
 It runs inside a copied workspace, not against the original source directory.
 The write operation is a medium-risk action, so it requires approval unless
 `--auto-approve` is used.
+
+Approvals are bound to a fingerprint of the requested tool action. When a
+pre-approved action is executed during resume, that approval is marked
+`consumed` so it cannot be reused for a different pending action.
+
+Read-file and command-output audit payloads are summarized with a content
+preview and character count. Tool callers still receive the full output, but
+the audit database avoids storing complete file contents or long command logs.
 
 ## Public Repository Hygiene
 

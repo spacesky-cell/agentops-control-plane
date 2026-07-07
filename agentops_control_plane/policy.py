@@ -81,8 +81,17 @@ class PolicyEngine:
                     Risk.CRITICAL,
                     f"Command matches denied pattern: {denied}",
                 )
+        for token in self.config.command_deny_shell_tokens:
+            if token in command:
+                return PolicyDecision(
+                    Decision.DENY,
+                    Risk.CRITICAL,
+                    f"Command contains shell control token: {token}",
+                )
         for prefix in self.config.command_allow_prefixes:
-            if command.lower().startswith(prefix.lower()):
+            lowered_command = command.lower()
+            lowered_prefix = prefix.lower()
+            if lowered_command == lowered_prefix or lowered_command.startswith(f"{lowered_prefix} "):
                 return PolicyDecision(Decision.ALLOW, Risk.LOW, "Command matches allowlist.")
         if self.config.unknown_command_requires_approval:
             return PolicyDecision(

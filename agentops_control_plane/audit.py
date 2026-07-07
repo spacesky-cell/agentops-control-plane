@@ -8,6 +8,9 @@ from typing import Any
 from .models import new_id, utc_now
 
 
+SCHEMA_VERSION = 1
+
+
 class AuditStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -58,8 +61,31 @@ class AuditStore:
                     payload_json TEXT NOT NULL,
                     FOREIGN KEY(run_id) REFERENCES runs(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
+            conn.execute(
+                """
+                INSERT INTO meta (key, value)
+                VALUES ('schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(SCHEMA_VERSION),),
+            )
+
+    def get_schema_version(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                ("schema_version",),
+            ).fetchone()
+        if not row:
+            return 0
+        return int(row["value"])
 
     def start_run(self, task: str, agent_name: str, workspace_path: Path) -> str:
         run_id = new_id("run")
@@ -78,6 +104,13 @@ class AuditStore:
             conn.execute(
                 "UPDATE runs SET status = ?, ended_at = ? WHERE id = ?",
                 (status, utc_now(), run_id),
+            )
+
+    def pause_run(self, run_id: str, status: str = "waiting_for_approval") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE runs SET status = ?, ended_at = NULL WHERE id = ?",
+                (status, run_id),
             )
 
     def add_event(
@@ -148,6 +181,13 @@ class AuditStore:
                 WHERE id = ?
                 """,
                 (status, utc_now(), approver, reason, approval_id),
+            )
+
+    def consume_approval(self, approval_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE approvals SET status = ? WHERE id = ? AND status = ?",
+                ("consumed", approval_id, "approved"),
             )
 
     def list_runs(self) -> list[dict[str, Any]]:

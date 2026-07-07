@@ -51,7 +51,10 @@ class ScriptedAgent:
             if request.tool_name == "run_command" and result.output.get("exit_code") != 0:
                 status = "failed"
                 break
-        gateway.finish_run(run_id, workspace, status)
+        if status == "waiting_for_approval":
+            gateway.pause_run(run_id, status)
+        else:
+            gateway.finish_run(run_id, workspace, status)
         return run_id
 
     def resume(
@@ -101,6 +104,8 @@ class ScriptedAgent:
                 preapproved_by=preapproved_by,
             )
             if result.status == ToolStatus.PENDING_APPROVAL:
+                if preapproved_by:
+                    raise ValueError(result.error or "No approved pending action found for this request.")
                 status = "waiting_for_approval"
                 break
             if not result.ok:
@@ -109,5 +114,8 @@ class ScriptedAgent:
             if request.tool_name == "run_command" and result.output.get("exit_code") != 0:
                 status = "failed"
                 break
-        gateway.finish_run(run_id, workspace, status)
+        if status == "waiting_for_approval":
+            gateway.pause_run(run_id, status)
+        else:
+            gateway.finish_run(run_id, workspace, status)
         return run_id

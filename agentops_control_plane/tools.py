@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -73,9 +74,12 @@ class ToolExecutor:
         }
 
     def run_command(self, workspace: Path, command: str) -> dict[str, Any]:
+        argv = shlex.split(command, posix=False)
+        if not argv:
+            raise ValueError("Missing command.")
         completed = subprocess.run(
-            command,
-            shell=True,
+            argv,
+            shell=False,
             cwd=workspace,
             text=True,
             stdout=subprocess.PIPE,

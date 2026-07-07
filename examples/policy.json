@@ -21,6 +21,19 @@
     "wget ",
     "invoke-webrequest"
   ],
+  "command_deny_shell_tokens": [
+    "&&",
+    "&",
+    "||",
+    ";",
+    "|",
+    ">",
+    "<",
+    "`",
+    "$(",
+    "\n",
+    "\r"
+  ],
   "protected_globs": [
     ".env",
     ".env.*",

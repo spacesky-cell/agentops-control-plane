@@ -42,9 +42,10 @@ class WorkspaceManager:
         archive = self.snapshots_dir / f"{run_id}-{label}.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for path in workspace_path.rglob("*"):
-                if path.is_dir() or any(part in DEFAULT_EXCLUDES for part in path.parts):
+                relative = path.relative_to(workspace_path)
+                if path.is_dir() or any(part in DEFAULT_EXCLUDES for part in relative.parts):
                     continue
-                zf.write(path, path.relative_to(workspace_path))
+                zf.write(path, relative)
         return archive
 
     def safe_path(self, workspace: str | Path, relative: str) -> Path:
