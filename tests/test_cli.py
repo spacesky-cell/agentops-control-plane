@@ -167,3 +167,24 @@ def test_cli_serves_mcp_stdio_json_lines(tmp_path, monkeypatch):
     assert responses[0]["result"]["status"] == "running"
     assert responses[1]["id"] == "read"
     assert responses[1]["result"]["status"] == "ok"
+
+
+def test_cli_reads_utf8_bom_scripted_plan(tmp_path, monkeypatch, capsys):
+    source = make_sample_repo(tmp_path)
+    plan = tmp_path / "plan_bom.json"
+    plan.write_text(
+        "\ufeff"
+        + json.dumps(
+            {
+                "name": "bom-agent",
+                "steps": [{"tool": "read_file", "args": {"path": "math_utils.py"}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    cli.main(["run-script", "--plan", str(plan), "--source", str(source)])
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "success"

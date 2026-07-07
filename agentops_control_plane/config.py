@@ -73,7 +73,7 @@ def load_policy(path: str | Path | None = None) -> PolicyConfig:
     policy_path = Path(path)
     if not policy_path.exists():
         raise FileNotFoundError(f"Policy file not found: {policy_path}")
-    data = json.loads(policy_path.read_text(encoding="utf-8"))
+    data = json.loads(policy_path.read_text(encoding="utf-8-sig"))
     defaults = asdict(PolicyConfig())
     defaults.update(data)
     return PolicyConfig(**defaults)

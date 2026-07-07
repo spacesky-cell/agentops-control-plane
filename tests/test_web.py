@@ -43,8 +43,35 @@ def test_index_links_to_approvals(tmp_path):
 
     html = render_index(store)
 
-    assert "href='/approvals'" in html
+    assert 'href="/approvals"' in html
     assert "Approvals" in html
+
+
+def test_index_renders_operational_summary_cards(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    running_id = store.start_run("active task", "agent", tmp_path / "workspace")
+    pending_id = store.start_run("approval task", "agent", tmp_path / "pending")
+    store.pause_run(pending_id)
+    store.create_approval(pending_id, "patch_text", {"args": {"path": "math_utils.py"}}, "Patch approval.")
+    store.finish_run(running_id, "success")
+
+    html = render_index(store)
+
+    assert "class='metric-grid'" in html
+    assert "Total runs" in html
+    assert "Waiting approvals" in html
+    assert "Pending requests" in html
+    assert "class='status-badge status-success'" in html
+    assert "class='status-badge status-waiting-for-approval'" in html
+
+
+def test_index_empty_state_is_actionable(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+
+    html = render_index(store)
+
+    assert "No runs yet" in html
+    assert "Start with run-script or run-mcp-plan" in html
 
 
 def test_approvals_page_lists_pending_requests(tmp_path):
@@ -121,16 +148,43 @@ def test_run_page_lists_approvals_for_that_run(tmp_path):
     assert f"action='/approvals/{approval_id}/reject?return_to=/runs/{run_id}'" in html
 
 
+def test_run_page_renders_summary_and_status_badges(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    store.pause_run(run_id)
+
+    html = render_run(store, run_id)
+
+    assert "class='run-summary'" in html
+    assert "class='status-badge status-waiting-for-approval'" in html
+    assert "No approvals for this run" in html
+
+
 def test_run_page_shows_resume_for_waiting_mcp_plan(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
     store.pause_run(run_id)
     store.set_run_metadata(run_id, {"adapter": "mcp-plan", "plan_path": str(tmp_path / "plan.json")})
+    approval_id = store.create_approval(run_id, "patch_text", {"args": {"path": "math_utils.py"}}, "Patch approval.")
+    store.decide_approval(approval_id, "approved", "reviewer")
 
     html = render_run(store, run_id)
 
     assert f"action='/runs/{run_id}/resume'" in html
     assert "Resume" in html
+
+
+def test_run_page_hides_resume_until_approval_is_approved(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    store.pause_run(run_id)
+    store.set_run_metadata(run_id, {"adapter": "mcp-plan", "plan_path": str(tmp_path / "plan.json")})
+    store.create_approval(run_id, "patch_text", {"args": {"path": "math_utils.py"}}, "Patch approval.")
+
+    html = render_run(store, run_id)
+
+    assert f"action='/runs/{run_id}/resume'" not in html
+    assert "Resume" not in html
 
 
 def test_dashboard_routes_approvals_page(tmp_path):

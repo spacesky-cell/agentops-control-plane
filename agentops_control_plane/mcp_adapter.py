@@ -25,7 +25,7 @@ class McpPlanAdapter(AgentAdapter):
     @classmethod
     def from_file(cls, path: str | Path) -> "McpPlanAdapter":
         plan_path = Path(path).resolve()
-        data = json.loads(plan_path.read_text(encoding="utf-8"))
+        data = json.loads(plan_path.read_text(encoding="utf-8-sig"))
         return cls(
             name=data.get("name", "mcp-plan-adapter"),
             tool_calls=[

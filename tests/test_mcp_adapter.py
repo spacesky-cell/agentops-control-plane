@@ -115,6 +115,19 @@ def test_mcp_plan_adapter_records_resume_metadata(tmp_path):
     }
 
 
+def test_mcp_plan_adapter_reads_utf8_bom_plan(tmp_path):
+    plan = tmp_path / "mcp_plan_bom.json"
+    plan.write_text(
+        "\ufeff" + json.dumps({"name": "bom-plan", "tool_calls": [{"name": "list_files"}]}),
+        encoding="utf-8",
+    )
+
+    adapter = McpPlanAdapter.from_file(plan)
+
+    assert adapter.name == "bom-plan"
+    assert adapter.tool_calls[0].name == "list_files"
+
+
 def test_mcp_plan_adapter_resumes_after_approval(tmp_path):
     source = make_sample_repo(tmp_path)
     plan = write_mcp_plan(

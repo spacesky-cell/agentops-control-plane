@@ -39,7 +39,7 @@ class ScriptedAgent(AgentAdapter):
 
     @classmethod
     def from_file(cls, path: str | Path) -> "ScriptedAgent":
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         return cls(name=data.get("name", "scripted-agent"), steps=data["steps"])
 
     def run(

@@ -130,6 +130,10 @@ individual run detail page; decisions are written back to the same SQLite audit
 store used by the CLI. MCP-style plan runs that are waiting on an approved
 action can also be resumed from the run detail page.
 
+For UI review, start the dashboard and open `http://127.0.0.1:8765`. The local
+HTML interface is dependency-free and can also be exercised with browser
+automation against the same SQLite audit store.
+
 ## Demo Scenario
 
 The example agent fixes a bug in `examples/sample_repo/math_utils.py`.
