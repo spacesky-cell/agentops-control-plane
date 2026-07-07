@@ -11,6 +11,10 @@ from .models import new_id, utc_now
 SCHEMA_VERSION = 1
 
 
+class ApprovalNotFoundError(ValueError):
+    pass
+
+
 class AuditStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -174,7 +178,7 @@ class AuditStore:
         if status not in {"approved", "rejected"}:
             raise ValueError("status must be 'approved' or 'rejected'")
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE approvals
                 SET status = ?, decided_at = ?, approver = ?, reason = ?
@@ -182,6 +186,8 @@ class AuditStore:
                 """,
                 (status, utc_now(), approver, reason, approval_id),
             )
+        if cursor.rowcount == 0:
+            raise ApprovalNotFoundError(f"Approval not found: {approval_id}")
 
     def consume_approval(self, approval_id: int) -> None:
         with self._connect() as conn:

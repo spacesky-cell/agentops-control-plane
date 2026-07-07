@@ -3,6 +3,7 @@ import zipfile
 from pathlib import Path
 
 from agentops_control_plane.agents import ScriptedAgent
+from agentops_control_plane.audit import ApprovalNotFoundError
 from agentops_control_plane.gateway import RuntimeGateway
 from agentops_control_plane.models import ToolRequest
 
@@ -285,3 +286,14 @@ def test_read_file_audit_uses_preview_not_full_content(tmp_path):
         "truncated": True,
     }
     assert content not in json.dumps(tool_event["payload"], ensure_ascii=False)
+
+
+def test_deciding_unknown_approval_raises_not_found(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+
+    try:
+        gateway.audit_store.decide_approval(999, "approved", "reviewer")
+    except ApprovalNotFoundError as exc:
+        assert "Approval not found: 999" in str(exc)
+    else:
+        raise AssertionError("deciding an unknown approval should raise ApprovalNotFoundError")

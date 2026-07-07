@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .audit import AuditStore
+from .audit import ApprovalNotFoundError, AuditStore
 
 
 class Dashboard:
@@ -41,6 +41,28 @@ class Dashboard:
                 self.send_response(404)
                 self.end_headers()
 
+            def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
+                parsed = urlparse(self.path)
+                parts = [part for part in parsed.path.split("/") if part]
+                if len(parts) == 3 and parts[0] == "approvals" and parts[2] in {"approve", "reject"}:
+                    try:
+                        approval_id = int(parts[1])
+                    except ValueError:
+                        self.send_response(404)
+                        self.end_headers()
+                        return
+                    status = "approved" if parts[2] == "approve" else "rejected"
+                    try:
+                        store.decide_approval(approval_id, status, "dashboard", f"{status} from dashboard")
+                    except ApprovalNotFoundError:
+                        self.send_response(404)
+                        self.end_headers()
+                        return
+                    self._redirect("/approvals")
+                    return
+                self.send_response(404)
+                self.end_headers()
+
             def log_message(self, format: str, *args: object) -> None:
                 return
 
@@ -59,6 +81,11 @@ class Dashboard:
                 self.send_header("Content-Length", str(len(encoded)))
                 self.end_headers()
                 self.wfile.write(encoded)
+
+            def _redirect(self, location: str) -> None:
+                self.send_response(303)
+                self.send_header("Location", location)
+                self.end_headers()
 
         return Handler
 
@@ -116,6 +143,7 @@ def render_approvals(store: AuditStore) -> str:
     for approval in store.list_approvals():
         payload = html.escape(json.dumps(approval["payload"], ensure_ascii=False, indent=2))
         run_id = html.escape(approval["run_id"])
+        actions = render_approval_actions(int(approval["id"]), str(approval["status"]))
         rows.append(
             "<tr>"
             f"<td>{approval['id']}</td>"
@@ -123,7 +151,7 @@ def render_approvals(store: AuditStore) -> str:
             f"<td>{html.escape(approval['status'])}</td>"
             f"<td>{html.escape(approval['tool_name'])}</td>"
             f"<td>{html.escape(approval['requested_at'])}</td>"
-            f"<td>{html.escape(str(approval.get('reason') or ''))}<pre>{payload}</pre></td>"
+            f"<td>{html.escape(str(approval.get('reason') or ''))}<pre>{payload}</pre>{actions}</td>"
             "</tr>"
         )
     content = (
@@ -134,6 +162,21 @@ def render_approvals(store: AuditStore) -> str:
         "</tbody></table>"
     )
     return render_shell("Approvals", content)
+
+
+def render_approval_actions(approval_id: int, status: str) -> str:
+    if status != "pending":
+        return ""
+    return (
+        "<div>"
+        f"<form method='post' action='/approvals/{approval_id}/approve' style='display:inline'>"
+        "<button type='submit'>Approve</button>"
+        "</form> "
+        f"<form method='post' action='/approvals/{approval_id}/reject' style='display:inline'>"
+        "<button type='submit'>Reject</button>"
+        "</form>"
+        "</div>"
+    )
 
 
 def render_run(store: AuditStore, run_id: str) -> str:

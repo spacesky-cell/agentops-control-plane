@@ -37,6 +37,8 @@ def test_approvals_page_lists_pending_requests(tmp_path):
     assert "patch_text" in html
     assert "math_utils.py" in html
     assert "return a + b" in html
+    assert f"action='/approvals/{approval_id}/approve'" in html
+    assert f"action='/approvals/{approval_id}/reject'" in html
 
 
 def test_run_page_shows_patch_diff_from_audit_events(tmp_path):
@@ -76,3 +78,76 @@ def test_dashboard_routes_approvals_page(tmp_path):
     server.server_close()
     assert response.status == 200
     assert "<h1>Approvals</h1>" in body
+
+
+def test_dashboard_post_approves_pending_request(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    approval_id = store.create_approval(
+        run_id,
+        "patch_text",
+        {"args": {"path": "math_utils.py"}, "request_fingerprint": "abc123"},
+        "Patch requires approval.",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(store).app())
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", f"/approvals/{approval_id}/approve")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    approval = store.list_approvals(run_id)[0]
+    assert response.status == 303
+    assert response.getheader("Location") == "/approvals"
+    assert approval["status"] == "approved"
+    assert approval["approver"] == "dashboard"
+
+
+def test_dashboard_post_rejects_pending_request(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    approval_id = store.create_approval(
+        run_id,
+        "patch_text",
+        {"args": {"path": "math_utils.py"}, "request_fingerprint": "abc123"},
+        "Patch requires approval.",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(store).app())
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", f"/approvals/{approval_id}/reject")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    approval = store.list_approvals(run_id)[0]
+    assert response.status == 303
+    assert response.getheader("Location") == "/approvals"
+    assert approval["status"] == "rejected"
+    assert approval["approver"] == "dashboard"
+
+
+def test_dashboard_post_unknown_approval_returns_not_found(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(store).app())
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", "/approvals/999/approve")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    assert response.status == 404
