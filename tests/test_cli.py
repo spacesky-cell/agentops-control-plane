@@ -27,6 +27,22 @@ def make_plan(root: Path) -> Path:
     return plan
 
 
+def make_mcp_plan(root: Path) -> Path:
+    plan = root / "mcp_plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "name": "cli-mcp-agent",
+                "tool_calls": [
+                    {"name": "read_file", "arguments": {"path": "math_utils.py"}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return plan
+
+
 def test_cli_uses_current_working_directory_for_agentops_home(tmp_path, monkeypatch, capsys):
     source = make_sample_repo(tmp_path)
     plan = make_plan(tmp_path)
@@ -51,3 +67,15 @@ def test_cli_home_option_overrides_agentops_home(tmp_path, monkeypatch, capsys):
     assert output["status"] == "success"
     assert (custom_home / ".agentops" / "runs.sqlite").exists()
     assert not (tmp_path / ".agentops" / "runs.sqlite").exists()
+
+
+def test_cli_runs_mcp_plan(tmp_path, monkeypatch, capsys):
+    source = make_sample_repo(tmp_path)
+    plan = make_mcp_plan(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    cli.main(["run-mcp-plan", "--plan", str(plan), "--source", str(source)])
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "success"
+    assert output["run_id"].startswith("run_")

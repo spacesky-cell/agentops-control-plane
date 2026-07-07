@@ -10,6 +10,7 @@ from .config import load_policy, write_default_policy
 from .evaluator import run_eval
 from .exporter import export_html, export_json
 from .gateway import RuntimeGateway
+from .mcp_adapter import McpPlanAdapter
 from .web import serve
 
 
@@ -37,6 +38,12 @@ def main(argv: list[str] | None = None) -> None:
     run_script.add_argument("--source", help="Source directory copied into an isolated workspace")
     run_script.add_argument("--task", default="Run scripted agent task")
     run_script.add_argument("--auto-approve", action="store_true")
+
+    run_mcp_plan = sub.add_parser("run-mcp-plan", help="Run a local MCP-style tool-call plan")
+    run_mcp_plan.add_argument("--plan", required=True, help="Path to MCP-style tool-call JSON plan")
+    run_mcp_plan.add_argument("--source", help="Source directory copied into an isolated workspace")
+    run_mcp_plan.add_argument("--task", default="Run MCP-style tool-call plan")
+    run_mcp_plan.add_argument("--auto-approve", action="store_true")
 
     resume_script = sub.add_parser("resume-script", help="Resume a waiting scripted agent run")
     resume_script.add_argument("run_id")
@@ -92,6 +99,18 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "run-script":
         agent = ScriptedAgent.from_file(args.plan)
         run_id = agent.run(
+            gateway,
+            task=args.task,
+            source=args.source,
+            auto_approve=args.auto_approve,
+        )
+        run = store.get_run(run_id)
+        print(json.dumps({"run_id": run_id, "status": run["status"]}, indent=2))
+        return
+
+    if args.command == "run-mcp-plan":
+        adapter = McpPlanAdapter.from_file(args.plan)
+        run_id = adapter.run(
             gateway,
             task=args.task,
             source=args.source,

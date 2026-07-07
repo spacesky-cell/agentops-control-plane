@@ -29,6 +29,7 @@ This project is a portfolio-grade MVP for those concerns.
 - SQLite audit log for runs, events, decisions, approvals, and schema version.
 - Workspace snapshots before and after execution.
 - Scripted agent adapter for deterministic demos and tests.
+- Local MCP-style tool-call plan adapter for exercising the same gateway contract.
 - HTML/JSON run export.
 - Small local web UI for browsing runs and traces.
 - Standard-library implementation; no runtime dependencies.
@@ -51,6 +52,15 @@ and the SQLite audit database under a different project home:
 ```powershell
 python -m agentops_control_plane --home .demo run-script `
   --plan examples\scripted_fix_agent.json `
+  --source examples\sample_repo `
+  --auto-approve
+```
+
+Run a local MCP-style tool-call plan through the same governance gateway:
+
+```powershell
+python -m agentops_control_plane run-mcp-plan `
+  --plan examples\mcp_tool_plan.json `
   --source examples\sample_repo `
   --auto-approve
 ```

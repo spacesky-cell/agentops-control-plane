@@ -46,6 +46,11 @@ backend-specific planning loop, but every tool action still crosses the
 `RuntimeGateway`. `ScriptedAgent` is the deterministic adapter used for demos,
 tests, and resume-flow reference behavior.
 
+`McpPlanAdapter` is a local MCP-style adapter skeleton. It reads a JSON plan of
+tool calls shaped as `{name, arguments}` entries and sends them through the
+same gateway. It is not a full MCP server implementation; it establishes the
+adapter-side contract that a real MCP transport can later feed.
+
 ## PolicyEngine
 
 The current policy engine is JSON-configured and deterministic. It supports:
