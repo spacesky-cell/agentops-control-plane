@@ -85,6 +85,8 @@ def test_mcp_stdio_json_lines_handles_requests(tmp_path):
 def test_mcp_stdio_lists_tools_with_input_schemas(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
     response = session.handle({"jsonrpc": "2.0", "id": "tools", "method": "tools/list"})
 
@@ -95,10 +97,94 @@ def test_mcp_stdio_lists_tools_with_input_schemas(tmp_path):
     assert by_name["patch_text"]["inputSchema"]["required"] == ["path", "old", "new"]
 
 
+def test_mcp_stdio_initialize_returns_server_capabilities(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+
+    assert response["result"]["protocolVersion"] == "2025-06-18"
+    assert response["result"]["serverInfo"] == {
+        "name": "agentops-control-plane",
+        "version": "0.1.0",
+    }
+    assert response["result"]["capabilities"]["tools"] == {"listChanged": False}
+
+
+def test_mcp_stdio_json_lines_skips_initialized_notification_response(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    input_stream = StringIO(
+        "\n".join(
+            [
+                json.dumps({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}}),
+                json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+                json.dumps({"jsonrpc": "2.0", "id": "tools", "method": "tools/list"}),
+            ]
+        )
+    )
+    output_stream = StringIO()
+
+    serve_json_lines(gateway, input_stream, output_stream)
+    responses = [json.loads(line) for line in output_stream.getvalue().splitlines()]
+
+    assert [response["id"] for response in responses] == ["init", "tools"]
+    assert responses[1]["result"]["tools"]
+
+
+def test_mcp_stdio_requires_initialize_before_mcp_methods(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle({"jsonrpc": "2.0", "id": "tools", "method": "tools/list"})
+
+    assert response["error"] == {
+        "code": -32002,
+        "message": "Session is not initialized.",
+    }
+
+
+def test_mcp_stdio_requires_initialized_notification_before_mcp_methods(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+
+    response = session.handle({"jsonrpc": "2.0", "id": "tools", "method": "tools/list"})
+
+    assert response["error"] == {
+        "code": -32002,
+        "message": "Session is not initialized.",
+    }
+
+
+def test_mcp_stdio_ping_works_before_initialize(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle({"jsonrpc": "2.0", "id": "ping", "method": "ping"})
+
+    assert response == {"jsonrpc": "2.0", "id": "ping", "result": {}}
+
+
+def test_mcp_stdio_unknown_method_uses_json_rpc_method_not_found(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    response = session.handle({"jsonrpc": "2.0", "id": "bad", "method": "unknown/method"})
+
+    assert response["error"] == {
+        "code": -32601,
+        "message": "Method not found: unknown/method",
+    }
+
+
 def test_mcp_stdio_tools_call_returns_mcp_content_shape(tmp_path):
     source = make_sample_repo(tmp_path)
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
     session.handle(
         {
             "jsonrpc": "2.0",
@@ -127,6 +213,8 @@ def test_mcp_stdio_tools_call_reports_pending_approval_as_mcp_error(tmp_path):
     source = make_sample_repo(tmp_path)
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
     session.handle(
         {
             "jsonrpc": "2.0",
@@ -152,3 +240,30 @@ def test_mcp_stdio_tools_call_reports_pending_approval_as_mcp_error(tmp_path):
     assert result["isError"] is True
     assert "pending_approval" in result["content"][0]["text"]
     assert "approval_id" in result["content"][0]["text"]
+
+
+def test_mcp_stdio_missing_method_uses_invalid_request_error(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle({"jsonrpc": "2.0", "id": "missing"})
+
+    assert response["error"] == {
+        "code": -32600,
+        "message": "Invalid Request: missing method.",
+    }
+
+
+def test_mcp_stdio_json_lines_returns_parse_error_for_invalid_json(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    input_stream = StringIO("{not-json}\n")
+    output_stream = StringIO()
+
+    serve_json_lines(gateway, input_stream, output_stream)
+    response = json.loads(output_stream.getvalue())
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32700, "message": "Parse error."},
+    }

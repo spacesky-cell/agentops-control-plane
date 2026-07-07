@@ -5,9 +5,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
+from . import __version__
 from .gateway import RuntimeGateway
 from .models import ToolRequest
 from .tools import list_tool_definitions
+
+PROTOCOL_VERSION = "2025-06-18"
+
+
+class JsonRpcError(Exception):
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 @dataclass
@@ -15,31 +25,73 @@ class McpStdioSession:
     gateway: RuntimeGateway
     run_id: str | None = None
     workspace: Path | None = None
+    initialize_requested: bool = False
+    initialized: bool = False
 
-    def handle(self, request: dict[str, Any]) -> dict[str, Any]:
+    def handle(self, request: dict[str, Any]) -> dict[str, Any] | None:
         request_id = request.get("id")
         try:
-            method = request["method"]
+            method = self._request_method(request)
             params = request.get("params", {})
-            if method == "run.start":
+            if method == "initialize":
+                result = self._initialize(params)
+            elif method == "notifications/initialized":
+                self.initialized = True
+                return None
+            elif method == "ping":
+                result = {}
+            elif method == "run.start":
                 result = self._start(params)
             elif method == "tools/list":
+                self._require_initialized()
                 result = self._list_tools()
             elif method == "tools/call":
+                self._require_initialized()
                 result = self._call_tool_mcp(params)
             elif method == "tool.call":
                 result = self._call_tool(params)
             elif method == "run.finish":
                 result = self._finish(params)
             else:
-                raise ValueError(f"Unsupported method: {method}")
+                raise JsonRpcError(-32601, f"Method not found: {method}")
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
+        except JsonRpcError as exc:
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": exc.code, "message": exc.message},
+            }
         except Exception as exc:  # noqa: BLE001 - transport boundary returns structured errors.
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {"code": -32000, "message": str(exc)},
             }
+
+    def _request_method(self, request: dict[str, Any]) -> str:
+        method = request.get("method")
+        if not isinstance(method, str) or not method:
+            raise JsonRpcError(-32600, "Invalid Request: missing method.")
+        return method
+
+    def _require_initialized(self) -> None:
+        if not self.initialized:
+            raise JsonRpcError(-32002, "Session is not initialized.")
+
+    def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
+        self.initialize_requested = True
+        requested_version = str(params.get("protocolVersion") or PROTOCOL_VERSION)
+        protocol_version = requested_version if requested_version == PROTOCOL_VERSION else PROTOCOL_VERSION
+        return {
+            "protocolVersion": protocol_version,
+            "capabilities": {
+                "tools": {"listChanged": False},
+            },
+            "serverInfo": {
+                "name": "agentops-control-plane",
+                "version": __version__,
+            },
+        }
 
     def _start(self, params: dict[str, Any]) -> dict[str, Any]:
         task = str(params.get("task", "MCP stdio run"))
@@ -108,6 +160,13 @@ def serve_json_lines(gateway: RuntimeGateway, input_stream: TextIO, output_strea
     for line in input_stream:
         if not line.strip():
             continue
-        response = session.handle(json.loads(line))
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError:
+            response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error."}}
+        else:
+            response = session.handle(request)
+        if response is None:
+            continue
         output_stream.write(json.dumps(response, ensure_ascii=False) + "\n")
         output_stream.flush()
