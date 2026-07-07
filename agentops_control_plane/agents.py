@@ -3,14 +3,37 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from .gateway import RuntimeGateway
 from .models import ToolRequest, ToolStatus
 
 
+@runtime_checkable
+class AgentAdapter(Protocol):
+    name: str
+
+    def run(
+        self,
+        gateway: RuntimeGateway,
+        task: str,
+        source: str | Path | None = None,
+        auto_approve: bool = False,
+    ) -> str:
+        """Start a governed run through the runtime gateway."""
+
+    def resume(
+        self,
+        gateway: RuntimeGateway,
+        run_id: str,
+        approver: str = "human",
+        auto_approve_remaining: bool = False,
+    ) -> str:
+        """Resume a paused governed run through the runtime gateway."""
+
+
 @dataclass
-class ScriptedAgent:
+class ScriptedAgent(AgentAdapter):
     name: str
     steps: list[dict[str, Any]]
 

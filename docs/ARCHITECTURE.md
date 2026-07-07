@@ -8,7 +8,7 @@ complete audit trail.
 ## Components
 
 ```text
-Scripted/OpenAI/Claude/LangGraph Agent
+Scripted/OpenAI/Claude/LangGraph AgentAdapter
         |
         v
 RuntimeGateway
@@ -38,6 +38,13 @@ This makes the system portable across agent backends.
 Runtime data is rooted at the CLI home directory. By default this is the
 current working directory, and callers can pass `--home <path>` before the
 subcommand to choose a different project home.
+
+## AgentAdapter
+
+Agent backends implement the `AgentAdapter` protocol. An adapter owns the
+backend-specific planning loop, but every tool action still crosses the
+`RuntimeGateway`. `ScriptedAgent` is the deterministic adapter used for demos,
+tests, and resume-flow reference behavior.
 
 ## PolicyEngine
 
