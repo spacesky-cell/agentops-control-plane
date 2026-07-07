@@ -90,6 +90,31 @@ def test_mcp_plan_adapter_pauses_for_approval(tmp_path):
     assert approvals[0]["payload"]["requested_by"] == "mcp-local-test"
 
 
+def test_mcp_plan_adapter_records_resume_metadata(tmp_path):
+    source = make_sample_repo(tmp_path)
+    plan = write_mcp_plan(
+        tmp_path / "mcp_plan.json",
+        [
+            {
+                "name": "patch_text",
+                "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+            }
+        ],
+    )
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    adapter = McpPlanAdapter.from_file(plan)
+
+    run_id = adapter.run(gateway, "approval mcp-style plan", source=source, auto_approve=False)
+    metadata = gateway.audit_store.get_run_metadata(run_id)
+
+    assert metadata == {
+        "adapter": "mcp-plan",
+        "plan_path": str(plan.resolve()),
+        "source": str(source.resolve()),
+        "task": "approval mcp-style plan",
+    }
+
+
 def test_mcp_plan_adapter_resumes_after_approval(tmp_path):
     source = make_sample_repo(tmp_path)
     plan = write_mcp_plan(

@@ -3,7 +3,39 @@ from http.server import ThreadingHTTPServer
 from threading import Thread
 
 from agentops_control_plane.audit import AuditStore
+from agentops_control_plane.gateway import RuntimeGateway
+from agentops_control_plane.mcp_adapter import McpPlanAdapter
 from agentops_control_plane.web import Dashboard, render_approvals, render_index, render_run, safe_return_to
+
+
+def make_sample_repo(root):
+    source = root / "sample_repo"
+    source.mkdir()
+    (source / "math_utils.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    (source / "test_math_utils.py").write_text(
+        "\n".join(
+            [
+                "import unittest",
+                "from math_utils import add",
+                "",
+                "class MathUtilsTest(unittest.TestCase):",
+                "    def test_add(self):",
+                "        self.assertEqual(add(2, 3), 5)",
+                "",
+                "if __name__ == '__main__':",
+                "    unittest.main()",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return source
+
+
+def write_mcp_plan(path, calls):
+    import json
+
+    path.write_text(json.dumps({"name": "web-mcp-agent", "tool_calls": calls}), encoding="utf-8")
+    return path
 
 
 def test_index_links_to_approvals(tmp_path):
@@ -87,6 +119,18 @@ def test_run_page_lists_approvals_for_that_run(tmp_path):
     assert "other.py" not in html
     assert f"action='/approvals/{approval_id}/approve?return_to=/runs/{run_id}'" in html
     assert f"action='/approvals/{approval_id}/reject?return_to=/runs/{run_id}'" in html
+
+
+def test_run_page_shows_resume_for_waiting_mcp_plan(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    store.pause_run(run_id)
+    store.set_run_metadata(run_id, {"adapter": "mcp-plan", "plan_path": str(tmp_path / "plan.json")})
+
+    html = render_run(store, run_id)
+
+    assert f"action='/runs/{run_id}/resume'" in html
+    assert "Resume" in html
 
 
 def test_dashboard_routes_approvals_page(tmp_path):
@@ -230,6 +274,75 @@ def test_dashboard_post_ignores_external_return_to(tmp_path):
     server.server_close()
     assert response.status == 303
     assert response.getheader("Location") == "/approvals"
+
+
+def test_dashboard_post_resumes_approved_mcp_plan(tmp_path):
+    source = make_sample_repo(tmp_path)
+    plan = write_mcp_plan(
+        tmp_path / "mcp_plan.json",
+        [
+            {"name": "read_file", "arguments": {"path": "math_utils.py"}},
+            {
+                "name": "patch_text",
+                "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+            },
+            {"name": "run_command", "arguments": {"command": "python -m unittest -q"}},
+        ],
+    )
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    adapter = McpPlanAdapter.from_file(plan)
+    run_id = adapter.run(gateway, "web resume mcp plan", source=source, auto_approve=False)
+    approval = gateway.audit_store.list_approvals(run_id)[0]
+    gateway.audit_store.decide_approval(approval["id"], "approved", "dashboard", "approved from test")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(gateway.audit_store).app())
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", f"/runs/{run_id}/resume")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    run = gateway.audit_store.get_run(run_id)
+    approvals = gateway.audit_store.list_approvals(run_id)
+    assert response.status == 303
+    assert response.getheader("Location") == f"/runs/{run_id}"
+    assert run["status"] == "success"
+    assert approvals[0]["status"] == "consumed"
+
+
+def test_dashboard_post_resume_without_approval_returns_conflict(tmp_path):
+    source = make_sample_repo(tmp_path)
+    plan = write_mcp_plan(
+        tmp_path / "mcp_plan.json",
+        [
+            {
+                "name": "patch_text",
+                "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+            }
+        ],
+    )
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    adapter = McpPlanAdapter.from_file(plan)
+    run_id = adapter.run(gateway, "web resume mcp plan", source=source, auto_approve=False)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(gateway.audit_store).app())
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", f"/runs/{run_id}/resume")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    run = gateway.audit_store.get_run(run_id)
+    assert response.status == 409
+    assert run["status"] == "waiting_for_approval"
 
 
 def test_safe_return_to_rejects_protocol_relative_paths():

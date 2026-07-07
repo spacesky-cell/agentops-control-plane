@@ -20,16 +20,19 @@ class McpToolCall:
 class McpPlanAdapter(AgentAdapter):
     name: str
     tool_calls: list[McpToolCall]
+    plan_path: Path | None = None
 
     @classmethod
     def from_file(cls, path: str | Path) -> "McpPlanAdapter":
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        plan_path = Path(path).resolve()
+        data = json.loads(plan_path.read_text(encoding="utf-8"))
         return cls(
             name=data.get("name", "mcp-plan-adapter"),
             tool_calls=[
                 McpToolCall(name=item["name"], arguments=item.get("arguments", {}))
                 for item in data["tool_calls"]
             ],
+            plan_path=plan_path,
         )
 
     def run(
@@ -40,6 +43,15 @@ class McpPlanAdapter(AgentAdapter):
         auto_approve: bool = False,
     ) -> str:
         run_id, workspace = gateway.start_run(task, self.name, source)
+        gateway.audit_store.set_run_metadata(
+            run_id,
+            {
+                "adapter": "mcp-plan",
+                "plan_path": str(self.plan_path) if self.plan_path else "",
+                "source": str(Path(source).resolve()) if source is not None else "",
+                "task": task,
+            },
+        )
         status = "success"
         for index, call in enumerate(self.tool_calls, start=1):
             request = ToolRequest(

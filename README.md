@@ -127,7 +127,8 @@ python -m agentops_control_plane serve --port 8765
 The dashboard lists runs, traces, approval requests, and patch diffs. Pending
 approval requests can be approved or rejected from `/approvals` or from an
 individual run detail page; decisions are written back to the same SQLite audit
-store used by the CLI.
+store used by the CLI. MCP-style plan runs that are waiting on an approved
+action can also be resumed from the run detail page.
 
 ## Demo Scenario
 

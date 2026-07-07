@@ -243,6 +243,29 @@ def test_audit_store_records_schema_version(tmp_path):
     assert gateway.audit_store.get_schema_version() == 1
 
 
+def test_audit_store_persists_run_metadata(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    run_id, _workspace = gateway.start_run("metadata run", "test-agent")
+
+    gateway.audit_store.set_run_metadata(run_id, {"adapter": "mcp-plan", "plan_path": "plan.json"})
+
+    assert gateway.audit_store.get_run_metadata(run_id) == {
+        "adapter": "mcp-plan",
+        "plan_path": "plan.json",
+    }
+
+
+def test_setting_unknown_run_metadata_raises_not_found(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+
+    try:
+        gateway.audit_store.set_run_metadata("run_missing", {"adapter": "mcp-plan"})
+    except ValueError as exc:
+        assert "Run not found: run_missing" in str(exc)
+    else:
+        raise AssertionError("setting metadata for an unknown run should fail")
+
+
 def test_waiting_for_approval_keeps_run_open(tmp_path):
     source = make_sample_repo(tmp_path)
     gateway = RuntimeGateway.from_home(tmp_path / "project")

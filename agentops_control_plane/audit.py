@@ -37,7 +37,8 @@ class AuditStore:
                     status TEXT NOT NULL,
                     started_at TEXT NOT NULL,
                     ended_at TEXT,
-                    workspace_path TEXT NOT NULL
+                    workspace_path TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
                 );
 
                 CREATE TABLE IF NOT EXISTS events (
@@ -80,6 +81,12 @@ class AuditStore:
                 """,
                 (str(SCHEMA_VERSION),),
             )
+            self._ensure_column(conn, "runs", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def get_schema_version(self) -> int:
         with self._connect() as conn:
@@ -90,6 +97,25 @@ class AuditStore:
         if not row:
             return 0
         return int(row["value"])
+
+    def set_run_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE runs SET metadata_json = ? WHERE id = ?",
+                (json.dumps(metadata, ensure_ascii=False), run_id),
+            )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Run not found: {run_id}")
+
+    def get_run_metadata(self, run_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT metadata_json FROM runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+        if not row:
+            return {}
+        return json.loads(row["metadata_json"])
 
     def start_run(self, task: str, agent_name: str, workspace_path: Path) -> str:
         run_id = new_id("run")

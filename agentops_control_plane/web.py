@@ -7,6 +7,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .audit import ApprovalNotFoundError, AuditStore
+from .config import PolicyConfig
+from .gateway import RuntimeGateway
+from .mcp_adapter import McpPlanAdapter
+from .policy import PolicyEngine
+from .tools import ToolExecutor
+from .workspace import WorkspaceManager
 
 
 class Dashboard:
@@ -59,6 +65,17 @@ class Dashboard:
                         self.end_headers()
                         return
                     self._redirect(safe_return_to(parsed.query))
+                    return
+                if len(parts) == 3 and parts[0] == "runs" and parts[2] == "resume":
+                    resume_status = resume_run(store, parts[1])
+                    if resume_status == "resumed":
+                        self._redirect(f"/runs/{parts[1]}")
+                    elif resume_status == "not_found":
+                        self.send_response(404)
+                        self.end_headers()
+                    else:
+                        self.send_response(409)
+                        self.end_headers()
                     return
                 self.send_response(404)
                 self.end_headers()
@@ -213,11 +230,13 @@ def render_run(store: AuditStore, run_id: str) -> str:
         f"{approval_rows or '<tr><td colspan=6>No approvals for this run</td></tr>'}"
         "</tbody></table>"
     )
+    resume_action = render_resume_action(store, run)
     content = (
         f"<p><a href='/'>Back</a></p><h1>{html.escape(run_id)}</h1>"
         f"<p><strong>Status:</strong> {html.escape(run['status'])}</p>"
         f"<p><strong>Task:</strong> {html.escape(run['task'])}</p>"
         f"<p><strong>Workspace:</strong> {html.escape(run['workspace_path'])}</p>"
+        f"{resume_action}"
         f"{diff_rows}"
         f"{approval_table}"
         "<h2>Events</h2><table><thead><tr><th>ID</th><th>Type</th><th>Tool</th>"
@@ -225,6 +244,19 @@ def render_run(store: AuditStore, run_id: str) -> str:
         f"{''.join(event_rows)}</tbody></table>"
     )
     return render_shell(f"Run {run_id}", content)
+
+
+def render_resume_action(store: AuditStore, run: dict[str, object]) -> str:
+    metadata = store.get_run_metadata(str(run["id"]))
+    if run["status"] != "waiting_for_approval" or metadata.get("adapter") != "mcp-plan":
+        return ""
+    run_id = html.escape(str(run["id"]))
+    return (
+        "<form method='post' "
+        f"action='/runs/{run_id}/resume'>"
+        "<button type='submit'>Resume</button>"
+        "</form>"
+    )
 
 
 def render_patch_diffs(events: list[dict[str, object]]) -> str:
@@ -265,6 +297,37 @@ def safe_return_to(query: str) -> str:
     if requested.startswith("/runs/run_"):
         return requested
     return "/approvals"
+
+
+def resume_run(store: AuditStore, run_id: str) -> str:
+    run = store.get_run(run_id)
+    if not run:
+        return "not_found"
+    metadata = store.get_run_metadata(run_id)
+    if metadata.get("adapter") != "mcp-plan":
+        return "not_found"
+    plan_path = str(metadata.get("plan_path") or "")
+    if not plan_path:
+        return "not_found"
+    adapter = McpPlanAdapter.from_file(plan_path)
+    gateway = gateway_from_store(store)
+    try:
+        adapter.resume(gateway, run_id, approver="dashboard")
+    except ValueError:
+        return "conflict"
+    return "resumed"
+
+
+def gateway_from_store(store: AuditStore) -> RuntimeGateway:
+    agentops_dir = store.db_path.parent
+    policy = PolicyConfig()
+    workspace_manager = WorkspaceManager(agentops_dir)
+    return RuntimeGateway(
+        audit_store=store,
+        workspace_manager=workspace_manager,
+        policy_engine=PolicyEngine(policy),
+        tool_executor=ToolExecutor(workspace_manager, policy),
+    )
 
 
 def default_store(project_root: str | Path) -> AuditStore:
