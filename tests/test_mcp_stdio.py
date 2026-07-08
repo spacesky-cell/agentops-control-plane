@@ -299,6 +299,57 @@ def test_mcp_stdio_tools_call_reports_pending_approval_as_mcp_error(tmp_path):
     assert "approval_id" in result["content"][0]["text"]
 
 
+def test_mcp_stdio_tools_call_reports_missing_name_as_mcp_error(tmp_path):
+    source = make_sample_repo(tmp_path)
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "start",
+            "method": "run.start",
+            "params": {"task": "stdio invalid", "agent_name": "stdio-agent", "source": str(source)},
+        }
+    )
+
+    response = session.handle({"jsonrpc": "2.0", "id": "read", "method": "tools/call", "params": {}})
+
+    assert "error" not in response
+    assert response["result"]["isError"] is True
+    assert "name" in response["result"]["content"][0]["text"]
+
+
+def test_mcp_stdio_tools_call_reports_non_object_arguments_as_mcp_error(tmp_path):
+    source = make_sample_repo(tmp_path)
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "start",
+            "method": "run.start",
+            "params": {"task": "stdio invalid", "agent_name": "stdio-agent", "source": str(source)},
+        }
+    )
+
+    response = session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "read",
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": "math_utils.py"},
+        }
+    )
+
+    assert "error" not in response
+    assert response["result"]["isError"] is True
+    assert "arguments" in response["result"]["content"][0]["text"]
+
+
 def test_mcp_stdio_missing_method_uses_invalid_request_error(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     session = McpStdioSession(gateway)
@@ -309,6 +360,15 @@ def test_mcp_stdio_missing_method_uses_invalid_request_error(tmp_path):
         "code": -32600,
         "message": "Invalid Request: missing method.",
     }
+
+
+def test_mcp_stdio_ignores_unknown_notifications(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {}})
+
+    assert response is None
 
 
 def test_mcp_stdio_rejects_invalid_jsonrpc_version(tmp_path):
@@ -347,6 +407,19 @@ def test_mcp_stdio_rejects_invalid_request_id_type(tmp_path):
         "jsonrpc": "2.0",
         "id": None,
         "error": {"code": -32600, "message": "Invalid Request: id must be a string or integer."},
+    }
+
+
+def test_mcp_stdio_rejects_non_object_params(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": []})
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": "init",
+        "error": {"code": -32600, "message": "Invalid Request: params must be an object."},
     }
 
 
