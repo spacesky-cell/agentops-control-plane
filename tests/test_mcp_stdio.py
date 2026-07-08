@@ -97,6 +97,28 @@ def test_mcp_stdio_lists_tools_with_input_schemas(tmp_path):
     assert by_name["patch_text"]["inputSchema"]["required"] == ["path", "old", "new"]
 
 
+def test_mcp_stdio_lists_empty_resources_after_initialize(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    response = session.handle({"jsonrpc": "2.0", "id": "resources", "method": "resources/list"})
+
+    assert response == {"jsonrpc": "2.0", "id": "resources", "result": {"resources": []}}
+
+
+def test_mcp_stdio_lists_empty_prompts_after_initialize(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    response = session.handle({"jsonrpc": "2.0", "id": "prompts", "method": "prompts/list"})
+
+    assert response == {"jsonrpc": "2.0", "id": "prompts", "result": {"prompts": []}}
+
+
 def test_mcp_stdio_initialize_returns_server_capabilities(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     session = McpStdioSession(gateway)
@@ -109,6 +131,8 @@ def test_mcp_stdio_initialize_returns_server_capabilities(tmp_path):
         "version": "0.1.0",
     }
     assert response["result"]["capabilities"]["tools"] == {"listChanged": False}
+    assert response["result"]["capabilities"]["resources"] == {"listChanged": False}
+    assert response["result"]["capabilities"]["prompts"] == {"listChanged": False}
 
 
 def test_mcp_stdio_json_lines_skips_initialized_notification_response(tmp_path):
@@ -284,6 +308,60 @@ def test_mcp_stdio_missing_method_uses_invalid_request_error(tmp_path):
     assert response["error"] == {
         "code": -32600,
         "message": "Invalid Request: missing method.",
+    }
+
+
+def test_mcp_stdio_rejects_invalid_jsonrpc_version(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle({"jsonrpc": "1.0", "id": "bad-version", "method": "ping"})
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": "bad-version",
+        "error": {"code": -32600, "message": "Invalid Request: jsonrpc must be '2.0'."},
+    }
+
+
+def test_mcp_stdio_rejects_missing_request_id_for_response_methods(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle({"jsonrpc": "2.0", "method": "ping"})
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32600, "message": "Invalid Request: id is required."},
+    }
+
+
+def test_mcp_stdio_rejects_invalid_request_id_type(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle({"jsonrpc": "2.0", "id": {"nested": "bad"}, "method": "ping"})
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32600, "message": "Invalid Request: id must be a string or integer."},
+    }
+
+
+def test_mcp_stdio_json_lines_rejects_non_object_request(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    input_stream = StringIO(json.dumps(["ping"]) + "\n")
+    output_stream = StringIO()
+
+    serve_json_lines(gateway, input_stream, output_stream)
+    response = json.loads(output_stream.getvalue())
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32600, "message": "Invalid Request: request must be an object."},
     }
 
 
