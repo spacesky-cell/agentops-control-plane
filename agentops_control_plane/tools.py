@@ -1,11 +1,84 @@
 from __future__ import annotations
 
 import subprocess
+import shlex
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from .config import PolicyConfig
 from .workspace import DEFAULT_EXCLUDES, WorkspaceManager
+
+
+TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "name": "list_files",
+        "description": "List files in the isolated run workspace.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Optional glob pattern. Defaults to **/*."},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "read_file",
+        "description": "Read a UTF-8 text file from the isolated run workspace.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Workspace-relative file path."},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "write_file",
+        "description": "Write a UTF-8 text file in the isolated run workspace.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Workspace-relative file path."},
+                "content": {"type": "string", "description": "New file content."},
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "patch_text",
+        "description": "Replace the first matching text occurrence in a workspace file.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Workspace-relative file path."},
+                "old": {"type": "string", "description": "Existing text to replace."},
+                "new": {"type": "string", "description": "Replacement text."},
+            },
+            "required": ["path", "old", "new"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "run_command",
+        "description": "Run an allowlisted command in the isolated run workspace.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Command line parsed into argv before execution."},
+            },
+            "required": ["command"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+
+def list_tool_definitions() -> list[dict[str, Any]]:
+    return deepcopy(TOOL_DEFINITIONS)
 
 
 class ToolExecutor:
@@ -73,9 +146,12 @@ class ToolExecutor:
         }
 
     def run_command(self, workspace: Path, command: str) -> dict[str, Any]:
+        argv = shlex.split(command, posix=False)
+        if not argv:
+            raise ValueError("Missing command.")
         completed = subprocess.run(
-            command,
-            shell=True,
+            argv,
+            shell=False,
             cwd=workspace,
             text=True,
             stdout=subprocess.PIPE,

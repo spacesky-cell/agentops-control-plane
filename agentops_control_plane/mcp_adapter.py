@@ -3,44 +3,37 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
+from .agents import AgentAdapter
 from .gateway import RuntimeGateway
 from .models import ToolRequest, ToolStatus
 
 
-@runtime_checkable
-class AgentAdapter(Protocol):
+@dataclass(frozen=True)
+class McpToolCall:
     name: str
-
-    def run(
-        self,
-        gateway: RuntimeGateway,
-        task: str,
-        source: str | Path | None = None,
-        auto_approve: bool = False,
-    ) -> str:
-        """Start a governed run through the runtime gateway."""
-
-    def resume(
-        self,
-        gateway: RuntimeGateway,
-        run_id: str,
-        approver: str = "human",
-        auto_approve_remaining: bool = False,
-    ) -> str:
-        """Resume a paused governed run through the runtime gateway."""
+    arguments: dict[str, Any]
 
 
 @dataclass
-class ScriptedAgent(AgentAdapter):
+class McpPlanAdapter(AgentAdapter):
     name: str
-    steps: list[dict[str, Any]]
+    tool_calls: list[McpToolCall]
+    plan_path: Path | None = None
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "ScriptedAgent":
-        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-        return cls(name=data.get("name", "scripted-agent"), steps=data["steps"])
+    def from_file(cls, path: str | Path) -> "McpPlanAdapter":
+        plan_path = Path(path).resolve()
+        data = json.loads(plan_path.read_text(encoding="utf-8-sig"))
+        return cls(
+            name=data.get("name", "mcp-plan-adapter"),
+            tool_calls=[
+                McpToolCall(name=item["name"], arguments=item.get("arguments", {}))
+                for item in data["tool_calls"]
+            ],
+            plan_path=plan_path,
+        )
 
     def run(
         self,
@@ -50,19 +43,28 @@ class ScriptedAgent(AgentAdapter):
         auto_approve: bool = False,
     ) -> str:
         run_id, workspace = gateway.start_run(task, self.name, source)
+        gateway.audit_store.set_run_metadata(
+            run_id,
+            {
+                "adapter": "mcp-plan",
+                "plan_path": str(self.plan_path) if self.plan_path else "",
+                "source": str(Path(source).resolve()) if source is not None else "",
+                "task": task,
+            },
+        )
         status = "success"
-        for index, step in enumerate(self.steps, start=1):
+        for index, call in enumerate(self.tool_calls, start=1):
             request = ToolRequest(
-                tool_name=step["tool"],
-                args=step.get("args", {}),
+                tool_name=call.name,
+                args=call.arguments,
                 requested_by=self.name,
             )
             gateway.audit_store.add_event(
                 run_id,
-                "agent_step",
-                f"Agent step {index}: {request.tool_name}",
-                {"step": step},
-                request.tool_name,
+                "mcp_tool_call",
+                f"MCP tool call {index}: {call.name}",
+                {"tool_call": {"name": call.name, "arguments": gateway._redact_args(call.arguments)}},
+                call.name,
             )
             result = gateway.execute_tool(run_id, workspace, request, auto_approve=auto_approve)
             if result.status == ToolStatus.PENDING_APPROVAL:
@@ -105,18 +107,18 @@ class ScriptedAgent(AgentAdapter):
             1 for event in gateway.audit_store.get_events(run_id) if event["type"] == "tool_executed"
         )
         status = "success"
-        for index, step in enumerate(self.steps[executed_count:], start=executed_count + 1):
+        for index, call in enumerate(self.tool_calls[executed_count:], start=executed_count + 1):
             request = ToolRequest(
-                tool_name=step["tool"],
-                args=step.get("args", {}),
+                tool_name=call.name,
+                args=call.arguments,
                 requested_by=self.name,
             )
             gateway.audit_store.add_event(
                 run_id,
-                "agent_step",
-                f"Resumed step {index}: {request.tool_name}",
-                {"step": step},
-                request.tool_name,
+                "mcp_tool_call",
+                f"Resumed MCP tool call {index}: {call.name}",
+                {"tool_call": {"name": call.name, "arguments": gateway._redact_args(call.arguments)}},
+                call.name,
             )
             preapproved_by = approver if index == executed_count + 1 else None
             result = gateway.execute_tool(

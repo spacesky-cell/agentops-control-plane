@@ -2,28 +2,36 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .agents import ScriptedAgent
 from .audit import AuditStore
-from .config import load_policy, write_default_policy
+from .config import PolicyConfig, load_policy, write_default_policy
 from .evaluator import run_eval
 from .exporter import export_html, export_json
 from .gateway import RuntimeGateway
+from .mcp_adapter import McpPlanAdapter
+from .mcp_stdio import serve_json_lines
 from .web import serve
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+def get_policy(args: argparse.Namespace) -> PolicyConfig:
+    return load_policy(getattr(args, "policy", None))
 
 
-def build_gateway(args: argparse.Namespace) -> RuntimeGateway:
-    policy = load_policy(getattr(args, "policy", None))
-    return RuntimeGateway.from_home(PROJECT_ROOT, policy)
+def get_home(args: argparse.Namespace) -> Path:
+    home = getattr(args, "home", None)
+    return Path(home).resolve() if home else Path.cwd()
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="agentops", description="AgentOps Control Plane")
     parser.add_argument("--policy", help="Path to policy JSON file")
+    parser.add_argument(
+        "--home",
+        help="Project home where .agentops runtime data is stored. Defaults to the current directory.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_script = sub.add_parser("run-script", help="Run a deterministic scripted agent")
@@ -32,11 +40,23 @@ def main(argv: list[str] | None = None) -> None:
     run_script.add_argument("--task", default="Run scripted agent task")
     run_script.add_argument("--auto-approve", action="store_true")
 
+    run_mcp_plan = sub.add_parser("run-mcp-plan", help="Run a local MCP-style tool-call plan")
+    run_mcp_plan.add_argument("--plan", required=True, help="Path to MCP-style tool-call JSON plan")
+    run_mcp_plan.add_argument("--source", help="Source directory copied into an isolated workspace")
+    run_mcp_plan.add_argument("--task", default="Run MCP-style tool-call plan")
+    run_mcp_plan.add_argument("--auto-approve", action="store_true")
+
     resume_script = sub.add_parser("resume-script", help="Resume a waiting scripted agent run")
     resume_script.add_argument("run_id")
     resume_script.add_argument("--plan", required=True, help="Path to scripted agent JSON plan")
     resume_script.add_argument("--approver", default="human")
     resume_script.add_argument("--auto-approve-remaining", action="store_true")
+
+    resume_mcp_plan = sub.add_parser("resume-mcp-plan", help="Resume a waiting MCP-style plan run")
+    resume_mcp_plan.add_argument("run_id")
+    resume_mcp_plan.add_argument("--plan", required=True, help="Path to MCP-style tool-call JSON plan")
+    resume_mcp_plan.add_argument("--approver", default="human")
+    resume_mcp_plan.add_argument("--auto-approve-remaining", action="store_true")
 
     sub.add_parser("runs", help="List runs")
 
@@ -65,6 +85,8 @@ def main(argv: list[str] | None = None) -> None:
     serve_cmd.add_argument("--host", default="127.0.0.1")
     serve_cmd.add_argument("--port", type=int, default=8765)
 
+    sub.add_parser("serve-mcp-stdio", help="Serve the local MCP-style JSON-lines stdio transport")
+
     init_policy = sub.add_parser("init-policy", help="Write a default policy JSON")
     init_policy.add_argument("--out", default="examples/policy.json")
 
@@ -75,11 +97,13 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "init-policy":
-        write_default_policy(PROJECT_ROOT / args.out)
-        print(f"Wrote {PROJECT_ROOT / args.out}")
+        output = get_home(args) / args.out
+        write_default_policy(output)
+        print(f"Wrote {output}")
         return
 
-    gateway = build_gateway(args)
+    policy = get_policy(args)
+    gateway = RuntimeGateway.from_home(get_home(args), policy)
     store: AuditStore = gateway.audit_store
 
     if args.command == "run-script":
@@ -94,9 +118,33 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps({"run_id": run_id, "status": run["status"]}, indent=2))
         return
 
+    if args.command == "run-mcp-plan":
+        adapter = McpPlanAdapter.from_file(args.plan)
+        run_id = adapter.run(
+            gateway,
+            task=args.task,
+            source=args.source,
+            auto_approve=args.auto_approve,
+        )
+        run = store.get_run(run_id)
+        print(json.dumps({"run_id": run_id, "status": run["status"]}, indent=2))
+        return
+
     if args.command == "resume-script":
         agent = ScriptedAgent.from_file(args.plan)
         run_id = agent.resume(
+            gateway,
+            args.run_id,
+            approver=args.approver,
+            auto_approve_remaining=args.auto_approve_remaining,
+        )
+        run = store.get_run(run_id)
+        print(json.dumps({"run_id": run_id, "status": run["status"]}, indent=2))
+        return
+
+    if args.command == "resume-mcp-plan":
+        adapter = McpPlanAdapter.from_file(args.plan)
+        run_id = adapter.resume(
             gateway,
             args.run_id,
             approver=args.approver,
@@ -144,7 +192,11 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "serve":
         print(f"Serving http://{args.host}:{args.port}")
-        serve(store, args.host, args.port)
+        serve(store, args.host, args.port, policy)
+        return
+
+    if args.command == "serve-mcp-stdio":
+        serve_json_lines(gateway, sys.stdin, sys.stdout)
         return
 
     if args.command == "eval":

@@ -8,6 +8,17 @@ from typing import Any
 from .models import new_id, utc_now
 
 
+SCHEMA_VERSION = 1
+
+
+class ApprovalNotFoundError(ValueError):
+    pass
+
+
+class ApprovalStateConflictError(ValueError):
+    pass
+
+
 class AuditStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -30,7 +41,8 @@ class AuditStore:
                     status TEXT NOT NULL,
                     started_at TEXT NOT NULL,
                     ended_at TEXT,
-                    workspace_path TEXT NOT NULL
+                    workspace_path TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
                 );
 
                 CREATE TABLE IF NOT EXISTS events (
@@ -58,8 +70,56 @@ class AuditStore:
                     payload_json TEXT NOT NULL,
                     FOREIGN KEY(run_id) REFERENCES runs(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
+            conn.execute(
+                """
+                INSERT INTO meta (key, value)
+                VALUES ('schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(SCHEMA_VERSION),),
+            )
+            self._ensure_column(conn, "runs", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def get_schema_version(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                ("schema_version",),
+            ).fetchone()
+        if not row:
+            return 0
+        return int(row["value"])
+
+    def set_run_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE runs SET metadata_json = ? WHERE id = ?",
+                (json.dumps(metadata, ensure_ascii=False), run_id),
+            )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Run not found: {run_id}")
+
+    def get_run_metadata(self, run_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT metadata_json FROM runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+        if not row:
+            return {}
+        return json.loads(row["metadata_json"])
 
     def start_run(self, task: str, agent_name: str, workspace_path: Path) -> str:
         run_id = new_id("run")
@@ -78,6 +138,13 @@ class AuditStore:
             conn.execute(
                 "UPDATE runs SET status = ?, ended_at = ? WHERE id = ?",
                 (status, utc_now(), run_id),
+            )
+
+    def pause_run(self, run_id: str, status: str = "waiting_for_approval") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE runs SET status = ?, ended_at = NULL WHERE id = ?",
+                (status, run_id),
             )
 
     def add_event(
@@ -141,13 +208,31 @@ class AuditStore:
         if status not in {"approved", "rejected"}:
             raise ValueError("status must be 'approved' or 'rejected'")
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE approvals
                 SET status = ?, decided_at = ?, approver = ?, reason = ?
-                WHERE id = ?
+                WHERE id = ? AND status = ?
                 """,
-                (status, utc_now(), approver, reason, approval_id),
+                (status, utc_now(), approver, reason, approval_id, "pending"),
+            )
+            if cursor.rowcount == 0:
+                row = conn.execute(
+                    "SELECT status FROM approvals WHERE id = ?",
+                    (approval_id,),
+                ).fetchone()
+                if row:
+                    raise ApprovalStateConflictError(
+                        f"Approval {approval_id} is not pending: {row['status']}"
+                    )
+        if cursor.rowcount == 0:
+            raise ApprovalNotFoundError(f"Approval not found: {approval_id}")
+
+    def consume_approval(self, approval_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE approvals SET status = ? WHERE id = ? AND status = ?",
+                ("consumed", approval_id, "approved"),
             )
 
     def list_runs(self) -> list[dict[str, Any]]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +63,14 @@ class RuntimeGateway:
         )
         self.audit_store.finish_run(run_id, status)
 
+    def pause_run(self, run_id: str, status: str = "waiting_for_approval") -> None:
+        self.audit_store.add_event(
+            run_id,
+            "run_paused",
+            f"Run paused with status {status}.",
+        )
+        self.audit_store.pause_run(run_id, status)
+
     def execute_tool(
         self,
         run_id: str,
@@ -85,7 +95,11 @@ class RuntimeGateway:
             approval_id = self.audit_store.create_approval(
                 run_id,
                 request.tool_name,
-                {"args": self._redact_args(request.args), "requested_by": request.requested_by},
+                {
+                    "args": self._redact_args(request.args),
+                    "requested_by": request.requested_by,
+                    "request_fingerprint": self.request_fingerprint(request),
+                },
                 decision.reason,
             )
             self.audit_store.add_event(
@@ -107,7 +121,11 @@ class RuntimeGateway:
             approval_id = self.audit_store.create_approval(
                 run_id,
                 request.tool_name,
-                {"args": self._redact_args(request.args), "requested_by": request.requested_by},
+                {
+                    "args": self._redact_args(request.args),
+                    "requested_by": request.requested_by,
+                    "request_fingerprint": self.request_fingerprint(request),
+                },
                 decision.reason,
             )
             self.audit_store.decide_approval(
@@ -126,11 +144,19 @@ class RuntimeGateway:
                 decision.risk.value,
             )
         if decision.decision == Decision.REQUIRE_APPROVAL and preapproved_by:
+            approval_id = self._find_approved_approval(run_id, request)
+            if approval_id is None:
+                return ToolResult(
+                    ToolStatus.PENDING_APPROVAL,
+                    error="No approved pending action found for this request.",
+                    decision=decision,
+                )
+            self.audit_store.consume_approval(approval_id)
             self.audit_store.add_event(
                 run_id,
                 "approval_used",
                 f"Pre-approved action executed by {preapproved_by}.",
-                {"approved_by": preapproved_by},
+                {"approved_by": preapproved_by, "approval_id": approval_id},
                 request.tool_name,
                 "approved",
                 decision.risk.value,
@@ -152,7 +178,10 @@ class RuntimeGateway:
             run_id,
             "tool_executed",
             f"Tool {request.tool_name} executed.",
-            {"args": self._redact_args(request.args), "output": output},
+            {
+                "args": self._redact_args(request.args),
+                "output": self._redact_output(request.tool_name, output),
+            },
             request.tool_name,
             decision.decision.value,
             decision.risk.value,
@@ -178,3 +207,40 @@ class RuntimeGateway:
             redacted["content_chars"] = len(content)
             del redacted["content"]
         return redacted
+
+    def request_fingerprint(self, request: ToolRequest) -> str:
+        payload = {
+            "tool_name": request.tool_name,
+            "args": request.args,
+        }
+        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _find_approved_approval(self, run_id: str, request: ToolRequest) -> int | None:
+        fingerprint = self.request_fingerprint(request)
+        for approval in self.audit_store.list_approvals(run_id):
+            if approval["status"] != "approved":
+                continue
+            if approval["tool_name"] != request.tool_name:
+                continue
+            if approval.get("payload", {}).get("request_fingerprint") == fingerprint:
+                return int(approval["id"])
+        return None
+
+    def _redact_output(self, tool_name: str, output: Any) -> Any:
+        if tool_name == "read_file" and isinstance(output, str):
+            return self._summarize_text(output)
+        if tool_name == "run_command" and isinstance(output, dict):
+            redacted = dict(output)
+            command_output = redacted.get("output")
+            if isinstance(command_output, str):
+                redacted["output"] = self._summarize_text(command_output)
+            return redacted
+        return output
+
+    def _summarize_text(self, text: str) -> dict[str, Any]:
+        return {
+            "content_preview": text[:500],
+            "content_chars": len(text),
+            "truncated": len(text) > 500,
+        }

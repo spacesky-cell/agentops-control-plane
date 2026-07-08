@@ -31,6 +31,24 @@ def test_allows_unittest_command():
     assert decision.decision == Decision.ALLOW
 
 
+def test_denies_allowlisted_command_with_shell_control_operator():
+    decision = PolicyEngine().evaluate(
+        ToolRequest("run_command", {"command": "python -m unittest -q && git status"}),
+        Path("workspace"),
+    )
+
+    assert decision.decision == Decision.DENY
+
+
+def test_denies_command_that_only_shares_allowlisted_string_prefix():
+    decision = PolicyEngine().evaluate(
+        ToolRequest("run_command", {"command": "git statusx"}),
+        Path("workspace"),
+    )
+
+    assert decision.decision == Decision.REQUIRE_APPROVAL
+
+
 def test_patch_requires_approval():
     decision = PolicyEngine().evaluate(
         ToolRequest("patch_text", {"path": "app.py", "old": "x", "new": "y"}),
