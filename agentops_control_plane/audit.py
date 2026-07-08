@@ -15,6 +15,10 @@ class ApprovalNotFoundError(ValueError):
     pass
 
 
+class ApprovalStateConflictError(ValueError):
+    pass
+
+
 class AuditStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -208,10 +212,19 @@ class AuditStore:
                 """
                 UPDATE approvals
                 SET status = ?, decided_at = ?, approver = ?, reason = ?
-                WHERE id = ?
+                WHERE id = ? AND status = ?
                 """,
-                (status, utc_now(), approver, reason, approval_id),
+                (status, utc_now(), approver, reason, approval_id, "pending"),
             )
+            if cursor.rowcount == 0:
+                row = conn.execute(
+                    "SELECT status FROM approvals WHERE id = ?",
+                    (approval_id,),
+                ).fetchone()
+                if row:
+                    raise ApprovalStateConflictError(
+                        f"Approval {approval_id} is not pending: {row['status']}"
+                    )
         if cursor.rowcount == 0:
             raise ApprovalNotFoundError(f"Approval not found: {approval_id}")
 

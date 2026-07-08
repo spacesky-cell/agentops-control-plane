@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .audit import ApprovalNotFoundError, AuditStore
+from .audit import ApprovalNotFoundError, ApprovalStateConflictError, AuditStore
 from .config import PolicyConfig
 from .gateway import RuntimeGateway
 from .mcp_adapter import McpPlanAdapter
@@ -64,6 +64,10 @@ class Dashboard:
                         store.decide_approval(approval_id, status, "dashboard", f"{status} from dashboard")
                     except ApprovalNotFoundError:
                         self.send_response(404)
+                        self.end_headers()
+                        return
+                    except ApprovalStateConflictError:
+                        self.send_response(409)
                         self.end_headers()
                         return
                     self._redirect(safe_return_to(parsed.query))

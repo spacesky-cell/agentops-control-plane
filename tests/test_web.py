@@ -289,6 +289,33 @@ def test_dashboard_post_rejects_pending_request(tmp_path):
     assert approval["approver"] == "dashboard"
 
 
+def test_dashboard_post_deciding_non_pending_request_returns_conflict(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    approval_id = store.create_approval(
+        run_id,
+        "patch_text",
+        {"args": {"path": "math_utils.py"}, "request_fingerprint": "abc123"},
+        "Patch requires approval.",
+    )
+    store.decide_approval(approval_id, "rejected", "reviewer", "No")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(store).app())
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", f"/approvals/{approval_id}/approve")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    approval = store.list_approvals(run_id)[0]
+    assert response.status == 409
+    assert approval["status"] == "rejected"
+
+
 def test_dashboard_post_unknown_approval_returns_not_found(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(store).app())

@@ -320,3 +320,25 @@ def test_deciding_unknown_approval_raises_not_found(tmp_path):
         assert "Approval not found: 999" in str(exc)
     else:
         raise AssertionError("deciding an unknown approval should raise ApprovalNotFoundError")
+
+
+def test_deciding_non_pending_approval_raises_conflict(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    run_id = gateway.audit_store.start_run("approval state", "test-agent", tmp_path / "workspace")
+    approval_id = gateway.audit_store.create_approval(
+        run_id,
+        "patch_text",
+        {"args": {"path": "math_utils.py"}},
+        "Patch approval.",
+    )
+    gateway.audit_store.decide_approval(approval_id, "rejected", "reviewer", "No")
+
+    try:
+        gateway.audit_store.decide_approval(approval_id, "approved", "reviewer", "Changed mind")
+    except ValueError as exc:
+        assert "not pending" in str(exc)
+    else:
+        raise AssertionError("deciding a non-pending approval should fail")
+
+    approval = gateway.audit_store.list_approvals(run_id)[0]
+    assert approval["status"] == "rejected"
