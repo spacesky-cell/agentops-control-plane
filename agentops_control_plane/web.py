@@ -16,11 +16,13 @@ from .workspace import WorkspaceManager
 
 
 class Dashboard:
-    def __init__(self, store: AuditStore) -> None:
+    def __init__(self, store: AuditStore, policy_config: PolicyConfig | None = None) -> None:
         self.store = store
+        self.policy_config = policy_config or PolicyConfig()
 
     def app(self) -> type[BaseHTTPRequestHandler]:
         store = self.store
+        policy_config = self.policy_config
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
@@ -67,7 +69,7 @@ class Dashboard:
                     self._redirect(safe_return_to(parsed.query))
                     return
                 if len(parts) == 3 and parts[0] == "runs" and parts[2] == "resume":
-                    resume_status = resume_run(store, parts[1])
+                    resume_status = resume_run(store, parts[1], policy_config)
                     if resume_status == "resumed":
                         self._redirect(f"/runs/{parts[1]}")
                     elif resume_status == "not_found":
@@ -107,8 +109,13 @@ class Dashboard:
         return Handler
 
 
-def serve(store: AuditStore, host: str, port: int) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), Dashboard(store).app())
+def serve(
+    store: AuditStore,
+    host: str,
+    port: int,
+    policy_config: PolicyConfig | None = None,
+) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer((host, port), Dashboard(store, policy_config).app())
     server.serve_forever()
     return server
 
@@ -488,7 +495,7 @@ def safe_return_to(query: str) -> str:
     return "/approvals"
 
 
-def resume_run(store: AuditStore, run_id: str) -> str:
+def resume_run(store: AuditStore, run_id: str, policy_config: PolicyConfig | None = None) -> str:
     run = store.get_run(run_id)
     if not run:
         return "not_found"
@@ -499,7 +506,7 @@ def resume_run(store: AuditStore, run_id: str) -> str:
     if not plan_path:
         return "not_found"
     adapter = McpPlanAdapter.from_file(plan_path)
-    gateway = gateway_from_store(store)
+    gateway = gateway_from_store(store, policy_config)
     try:
         adapter.resume(gateway, run_id, approver="dashboard")
     except ValueError:
@@ -507,9 +514,9 @@ def resume_run(store: AuditStore, run_id: str) -> str:
     return "resumed"
 
 
-def gateway_from_store(store: AuditStore) -> RuntimeGateway:
+def gateway_from_store(store: AuditStore, policy_config: PolicyConfig | None = None) -> RuntimeGateway:
     agentops_dir = store.db_path.parent
-    policy = PolicyConfig()
+    policy = policy_config or PolicyConfig()
     workspace_manager = WorkspaceManager(agentops_dir)
     return RuntimeGateway(
         audit_store=store,

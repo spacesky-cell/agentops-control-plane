@@ -3,6 +3,7 @@ from http.server import ThreadingHTTPServer
 from threading import Thread
 
 from agentops_control_plane.audit import AuditStore
+from agentops_control_plane.config import PolicyConfig
 from agentops_control_plane.gateway import RuntimeGateway
 from agentops_control_plane.mcp_adapter import McpPlanAdapter
 from agentops_control_plane.web import Dashboard, render_approvals, render_index, render_run, safe_return_to
@@ -397,6 +398,44 @@ def test_dashboard_post_resume_without_approval_returns_conflict(tmp_path):
     run = gateway.audit_store.get_run(run_id)
     assert response.status == 409
     assert run["status"] == "waiting_for_approval"
+
+
+def test_dashboard_post_resume_uses_served_policy_for_remaining_tools(tmp_path):
+    source = make_sample_repo(tmp_path)
+    plan = write_mcp_plan(
+        tmp_path / "mcp_plan.json",
+        [
+            {
+                "name": "patch_text",
+                "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+            },
+            {"name": "run_command", "arguments": {"command": "python -m unittest -q"}},
+        ],
+    )
+    policy = PolicyConfig(command_allow_prefixes=[])
+    gateway = RuntimeGateway.from_home(tmp_path / "project", policy)
+    adapter = McpPlanAdapter.from_file(plan)
+    run_id = adapter.run(gateway, "web resume mcp plan", source=source, auto_approve=False)
+    approval = gateway.audit_store.list_approvals(run_id)[0]
+    gateway.audit_store.decide_approval(approval["id"], "approved", "dashboard", "approved from test")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(gateway.audit_store, policy).app())
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", f"/runs/{run_id}/resume")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    run = gateway.audit_store.get_run(run_id)
+    approvals = gateway.audit_store.list_approvals(run_id)
+    assert response.status == 303
+    assert run["status"] == "waiting_for_approval"
+    assert [approval["status"] for approval in approvals] == ["consumed", "pending"]
+    assert approvals[1]["tool_name"] == "run_command"
 
 
 def test_safe_return_to_rejects_protocol_relative_paths():

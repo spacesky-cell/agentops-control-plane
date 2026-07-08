@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .agents import ScriptedAgent
 from .audit import AuditStore
-from .config import load_policy, write_default_policy
+from .config import PolicyConfig, load_policy, write_default_policy
 from .evaluator import run_eval
 from .exporter import export_html, export_json
 from .gateway import RuntimeGateway
@@ -16,9 +16,8 @@ from .mcp_stdio import serve_json_lines
 from .web import serve
 
 
-def build_gateway(args: argparse.Namespace) -> RuntimeGateway:
-    policy = load_policy(getattr(args, "policy", None))
-    return RuntimeGateway.from_home(get_home(args), policy)
+def get_policy(args: argparse.Namespace) -> PolicyConfig:
+    return load_policy(getattr(args, "policy", None))
 
 
 def get_home(args: argparse.Namespace) -> Path:
@@ -103,7 +102,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Wrote {output}")
         return
 
-    gateway = build_gateway(args)
+    policy = get_policy(args)
+    gateway = RuntimeGateway.from_home(get_home(args), policy)
     store: AuditStore = gateway.audit_store
 
     if args.command == "run-script":
@@ -192,7 +192,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "serve":
         print(f"Serving http://{args.host}:{args.port}")
-        serve(store, args.host, args.port)
+        serve(store, args.host, args.port, policy)
         return
 
     if args.command == "serve-mcp-stdio":
