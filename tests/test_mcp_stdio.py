@@ -350,6 +350,115 @@ def test_mcp_stdio_tools_call_reports_non_object_arguments_as_mcp_error(tmp_path
     assert "arguments" in response["result"]["content"][0]["text"]
 
 
+def test_mcp_stdio_tools_call_reports_missing_required_argument_as_mcp_error(tmp_path):
+    source = make_sample_repo(tmp_path)
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "start",
+            "method": "run.start",
+            "params": {"task": "stdio invalid", "agent_name": "stdio-agent", "source": str(source)},
+        }
+    )
+
+    response = session.handle(
+        {"jsonrpc": "2.0", "id": "read", "method": "tools/call", "params": {"name": "read_file"}}
+    )
+
+    assert "error" not in response
+    assert response["result"]["isError"] is True
+    assert "path" in response["result"]["content"][0]["text"]
+    assert "required" in response["result"]["content"][0]["text"]
+
+
+def test_mcp_stdio_tools_call_reports_unexpected_argument_as_mcp_error(tmp_path):
+    source = make_sample_repo(tmp_path)
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "start",
+            "method": "run.start",
+            "params": {"task": "stdio invalid", "agent_name": "stdio-agent", "source": str(source)},
+        }
+    )
+
+    response = session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "read",
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": "math_utils.py", "extra": True}},
+        }
+    )
+
+    assert "error" not in response
+    assert response["result"]["isError"] is True
+    assert "extra" in response["result"]["content"][0]["text"]
+    assert "unexpected" in response["result"]["content"][0]["text"]
+
+
+def test_mcp_stdio_tools_call_reports_wrong_argument_type_as_mcp_error(tmp_path):
+    source = make_sample_repo(tmp_path)
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "start",
+            "method": "run.start",
+            "params": {"task": "stdio invalid", "agent_name": "stdio-agent", "source": str(source)},
+        }
+    )
+
+    response = session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "read",
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": 42}},
+        }
+    )
+
+    assert "error" not in response
+    assert response["result"]["isError"] is True
+    assert "path" in response["result"]["content"][0]["text"]
+    assert "string" in response["result"]["content"][0]["text"]
+
+
+def test_mcp_stdio_tools_call_reports_unknown_tool_as_mcp_error(tmp_path):
+    source = make_sample_repo(tmp_path)
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "start",
+            "method": "run.start",
+            "params": {"task": "stdio invalid", "agent_name": "stdio-agent", "source": str(source)},
+        }
+    )
+
+    response = session.handle(
+        {"jsonrpc": "2.0", "id": "read", "method": "tools/call", "params": {"name": "missing_tool"}}
+    )
+
+    assert "error" not in response
+    assert response["result"]["isError"] is True
+    assert response["result"]["content"][0]["text"] == "Invalid tools/call params: unknown tool: missing_tool."
+
+
 def test_mcp_stdio_missing_method_uses_invalid_request_error(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     session = McpStdioSession(gateway)

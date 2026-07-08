@@ -188,6 +188,9 @@ class McpStdioSession:
         arguments = params.get("arguments", {})
         if not isinstance(arguments, dict):
             return self._tool_error("Invalid tools/call params: arguments must be an object.")
+        validation_error = self._validate_tool_arguments(name, arguments)
+        if validation_error is not None:
+            return self._tool_error(validation_error)
         payload = self._call_tool(params)
         if payload["ok"]:
             return {
@@ -203,6 +206,27 @@ class McpStdioSession:
 
     def _tool_error(self, message: str) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": message}], "isError": True}
+
+    def _validate_tool_arguments(self, name: str, arguments: dict[str, Any]) -> str | None:
+        definitions = {tool["name"]: tool for tool in list_tool_definitions()}
+        tool = definitions.get(name)
+        if tool is None:
+            return f"Invalid tools/call params: unknown tool: {name}."
+        schema = tool.get("inputSchema", {})
+        required = schema.get("required", [])
+        for field in required:
+            if field not in arguments:
+                return f"Invalid tools/call arguments: {field} is required."
+        properties = schema.get("properties", {})
+        if schema.get("additionalProperties") is False:
+            for field in arguments:
+                if field not in properties:
+                    return f"Invalid tools/call arguments: unexpected field: {field}."
+        for field, value in arguments.items():
+            expected = properties.get(field, {}).get("type")
+            if expected == "string" and not isinstance(value, str):
+                return f"Invalid tools/call arguments: {field} must be a string."
+        return None
 
     def _stringify_tool_output(self, output: Any) -> str:
         if isinstance(output, str):
