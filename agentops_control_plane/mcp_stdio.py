@@ -34,12 +34,11 @@ class McpStdioSession:
             self._validate_request_object(request)
             method = self._request_method(request)
             request_id = self._request_id(request, method)
-            params = request.get("params", {})
+            params = self._request_params(request)
             if method == "initialize":
                 result = self._initialize(params)
-            elif method == "notifications/initialized":
-                if self.initialize_requested:
-                    self.initialized = True
+            elif self._is_notification(method):
+                self._handle_notification(method)
                 return None
             elif method == "ping":
                 result = {}
@@ -98,7 +97,7 @@ class McpStdioSession:
         return method
 
     def _request_id(self, request: dict[str, Any], method: str) -> str | int | None:
-        if method == "notifications/initialized":
+        if self._is_notification(method):
             return None
         if "id" not in request or request["id"] is None:
             raise JsonRpcError(-32600, "Invalid Request: id is required.")
@@ -106,6 +105,19 @@ class McpStdioSession:
         if isinstance(request_id, str) or (isinstance(request_id, int) and not isinstance(request_id, bool)):
             return request_id
         raise JsonRpcError(-32600, "Invalid Request: id must be a string or integer.")
+
+    def _request_params(self, request: dict[str, Any]) -> dict[str, Any]:
+        params = request.get("params", {})
+        if not isinstance(params, dict):
+            raise JsonRpcError(-32600, "Invalid Request: params must be an object.")
+        return params
+
+    def _is_notification(self, method: str) -> bool:
+        return method.startswith("notifications/")
+
+    def _handle_notification(self, method: str) -> None:
+        if method == "notifications/initialized" and self.initialize_requested:
+            self.initialized = True
 
     def _require_initialized(self) -> None:
         if not self.initialized:
@@ -170,6 +182,12 @@ class McpStdioSession:
         return payload
 
     def _call_tool_mcp(self, params: dict[str, Any]) -> dict[str, Any]:
+        name = params.get("name")
+        if not isinstance(name, str) or not name:
+            return self._tool_error("Invalid tools/call params: name is required.")
+        arguments = params.get("arguments", {})
+        if not isinstance(arguments, dict):
+            return self._tool_error("Invalid tools/call params: arguments must be an object.")
         payload = self._call_tool(params)
         if payload["ok"]:
             return {
@@ -181,6 +199,9 @@ class McpStdioSession:
             message = f"{payload['status']}: {message} approval_id={payload['approval_id']}"
         else:
             message = f"{payload['status']}: {message}"
+        return {"content": [{"type": "text", "text": message}], "isError": True}
+
+    def _tool_error(self, message: str) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": message}], "isError": True}
 
     def _stringify_tool_output(self, output: Any) -> str:
