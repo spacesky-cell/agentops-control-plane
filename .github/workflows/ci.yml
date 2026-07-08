@@ -3,6 +3,10 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -28,3 +32,6 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Run deterministic eval
+        run: python -m agentops_control_plane eval --tasks examples/tasks.jsonl --auto-approve
