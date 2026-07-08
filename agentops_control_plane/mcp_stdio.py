@@ -36,7 +36,8 @@ class McpStdioSession:
             if method == "initialize":
                 result = self._initialize(params)
             elif method == "notifications/initialized":
-                self.initialized = True
+                if self.initialize_requested:
+                    self.initialized = True
                 return None
             elif method == "ping":
                 result = {}

@@ -156,6 +156,39 @@ def test_mcp_stdio_requires_initialized_notification_before_mcp_methods(tmp_path
     }
 
 
+def test_mcp_stdio_ignores_initialized_notification_before_initialize(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    notification = session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    response = session.handle({"jsonrpc": "2.0", "id": "tools", "method": "tools/list"})
+
+    assert notification is None
+    assert response["error"] == {
+        "code": -32002,
+        "message": "Session is not initialized.",
+    }
+
+
+def test_mcp_stdio_tools_call_requires_initialized_session(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+
+    response = session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "read",
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": "math_utils.py"}},
+        }
+    )
+
+    assert response["error"] == {
+        "code": -32002,
+        "message": "Session is not initialized.",
+    }
+
+
 def test_mcp_stdio_ping_works_before_initialize(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     session = McpStdioSession(gateway)
