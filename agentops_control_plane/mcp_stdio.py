@@ -28,10 +28,12 @@ class McpStdioSession:
     initialize_requested: bool = False
     initialized: bool = False
 
-    def handle(self, request: dict[str, Any]) -> dict[str, Any] | None:
-        request_id = request.get("id")
+    def handle(self, request: Any) -> dict[str, Any] | None:
+        request_id = self._response_id(request)
         try:
+            self._validate_request_object(request)
             method = self._request_method(request)
+            request_id = self._request_id(request, method)
             params = request.get("params", {})
             if method == "initialize":
                 result = self._initialize(params)
@@ -46,6 +48,12 @@ class McpStdioSession:
             elif method == "tools/list":
                 self._require_initialized()
                 result = self._list_tools()
+            elif method == "resources/list":
+                self._require_initialized()
+                result = self._list_resources()
+            elif method == "prompts/list":
+                self._require_initialized()
+                result = self._list_prompts()
             elif method == "tools/call":
                 self._require_initialized()
                 result = self._call_tool_mcp(params)
@@ -69,11 +77,35 @@ class McpStdioSession:
                 "error": {"code": -32000, "message": str(exc)},
             }
 
+    def _response_id(self, request: Any) -> str | int | None:
+        if not isinstance(request, dict):
+            return None
+        request_id = request.get("id")
+        if isinstance(request_id, str) or (isinstance(request_id, int) and not isinstance(request_id, bool)):
+            return request_id
+        return None
+
+    def _validate_request_object(self, request: Any) -> None:
+        if not isinstance(request, dict):
+            raise JsonRpcError(-32600, "Invalid Request: request must be an object.")
+        if request.get("jsonrpc") != "2.0":
+            raise JsonRpcError(-32600, "Invalid Request: jsonrpc must be '2.0'.")
+
     def _request_method(self, request: dict[str, Any]) -> str:
         method = request.get("method")
         if not isinstance(method, str) or not method:
             raise JsonRpcError(-32600, "Invalid Request: missing method.")
         return method
+
+    def _request_id(self, request: dict[str, Any], method: str) -> str | int | None:
+        if method == "notifications/initialized":
+            return None
+        if "id" not in request or request["id"] is None:
+            raise JsonRpcError(-32600, "Invalid Request: id is required.")
+        request_id = request["id"]
+        if isinstance(request_id, str) or (isinstance(request_id, int) and not isinstance(request_id, bool)):
+            return request_id
+        raise JsonRpcError(-32600, "Invalid Request: id must be a string or integer.")
 
     def _require_initialized(self) -> None:
         if not self.initialized:
@@ -87,6 +119,8 @@ class McpStdioSession:
             "protocolVersion": protocol_version,
             "capabilities": {
                 "tools": {"listChanged": False},
+                "resources": {"listChanged": False},
+                "prompts": {"listChanged": False},
             },
             "serverInfo": {
                 "name": "agentops-control-plane",
@@ -103,6 +137,12 @@ class McpStdioSession:
 
     def _list_tools(self) -> dict[str, Any]:
         return {"tools": list_tool_definitions()}
+
+    def _list_resources(self) -> dict[str, Any]:
+        return {"resources": []}
+
+    def _list_prompts(self) -> dict[str, Any]:
+        return {"prompts": []}
 
     def _call_tool(self, params: dict[str, Any]) -> dict[str, Any]:
         if not self.run_id or self.workspace is None:
