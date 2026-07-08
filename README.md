@@ -83,13 +83,13 @@ python -m agentops_control_plane serve-mcp-stdio
 
 It accepts newline-delimited JSON-RPC requests. Standard MCP-style clients
 should call `initialize`, send `notifications/initialized`, then use
-`tools/list` and `tools/call`. `ping` is available as a basic health check.
-`tools/list` returns the available tool definitions and input schemas.
-`tools/call` wraps tool output as MCP-style content blocks with `isError`.
+`tools/list` and `tools/call`. `tools/list` returns the governed tool
+definitions and input schemas. `tools/call` validates arguments against those
+schemas and wraps output or tool errors as MCP-style content blocks with
+`isError`.
 
-The transport also supports local run lifecycle methods: `run.start`,
-`run.finish`, and the older `tool.call` response shape for deterministic scripts
-that do not need MCP initialization.
+See [docs/MCP_STDIO.md](docs/MCP_STDIO.md) for the full initialization order,
+supported methods, JSON-RPC error semantics, and tool argument constraints.
 
 List runs:
 

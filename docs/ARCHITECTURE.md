@@ -53,10 +53,13 @@ adapter-side contract that a real MCP transport can later feed. It also follows
 the same approval resume pattern as `ScriptedAgent`: the next pending tool call
 must match an approved request fingerprint before it can execute.
 
-`serve-mcp-stdio` exposes a thin newline-delimited JSON transport with
-`run.start`, `tool.call`, and `run.finish` methods. It is useful for exercising
-the gateway through a process boundary while keeping the transport intentionally
-smaller than a complete MCP server handshake.
+`serve-mcp-stdio` exposes a newline-delimited JSON-RPC transport with MCP
+`initialize`, `notifications/initialized`, `tools/list`, `tools/call`,
+`resources/list`, and `prompts/list` methods. It is useful for exercising the
+gateway through a process boundary while giving MCP-style clients the same
+governed tool surface and argument schemas as the local adapters. The transport
+also keeps `run.start`, `tool.call`, and `run.finish` compatibility methods for
+deterministic scripts that do not need the MCP session lifecycle.
 
 ## PolicyEngine
 
@@ -134,7 +137,7 @@ those execution environments: policy, approval, trace, replay, and reporting.
 ## Next Production Steps
 
 - Add Docker and cloud sandbox backends.
-- Add MCP tool adapter.
+- Add richer MCP resource and prompt providers.
 - Add OpenAI Agents SDK adapter.
 - Add Claude Code/Codex CLI adapter.
 - Add OpenTelemetry export.
