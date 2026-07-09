@@ -2,6 +2,7 @@ import json
 from io import StringIO
 from pathlib import Path
 
+from agentops_control_plane import __version__
 from agentops_control_plane.gateway import RuntimeGateway
 from agentops_control_plane.mcp_stdio import McpStdioSession, serve_json_lines
 
@@ -128,7 +129,7 @@ def test_mcp_stdio_initialize_returns_server_capabilities(tmp_path):
     assert response["result"]["protocolVersion"] == "2025-06-18"
     assert response["result"]["serverInfo"] == {
         "name": "agentops-control-plane",
-        "version": "0.1.0",
+        "version": __version__,
     }
     assert response["result"]["capabilities"]["tools"] == {"listChanged": False}
     assert response["result"]["capabilities"]["resources"] == {"listChanged": False}
