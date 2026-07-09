@@ -3,6 +3,8 @@ import sys
 from io import StringIO
 from pathlib import Path
 
+import subprocess
+
 from agentops_control_plane import cli
 
 
@@ -104,6 +106,80 @@ def test_cli_runs_mcp_plan(tmp_path, monkeypatch, capsys):
     output = json.loads(capsys.readouterr().out)
     assert output["status"] == "success"
     assert output["run_id"].startswith("run_")
+
+
+def test_cli_runs_claude_code_plan_with_injected_runner(tmp_path, monkeypatch, capsys):
+    source = make_sample_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fake_runner(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "result": json.dumps(
+                        {
+                            "name": "cli-claude-plan",
+                            "tool_calls": [
+                                {"name": "read_file", "arguments": {"path": "math_utils.py"}}
+                            ],
+                        }
+                    )
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_runner)
+
+    cli.main(
+        [
+            "run-claude-code-plan",
+            "--source",
+            str(source),
+            "--task",
+            "Read math_utils.py",
+            "--claude-command",
+            "claude-test",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "success"
+    assert output["run_id"].startswith("run_")
+
+
+def test_cli_reports_claude_code_plan_failure_without_traceback(tmp_path, monkeypatch, capsys):
+    source = make_sample_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fake_runner(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout="",
+            stderr="503 no available accounts",
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_runner)
+
+    cli.main(
+        [
+            "run-claude-code-plan",
+            "--source",
+            str(source),
+            "--task",
+            "Read math_utils.py",
+            "--claude-command",
+            "claude-test",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "failed"
+    assert output["run_id"].startswith("run_")
+    assert "503 no available accounts" in output["error"]
 
 
 def test_cli_resumes_mcp_plan_after_approval(tmp_path, monkeypatch, capsys):

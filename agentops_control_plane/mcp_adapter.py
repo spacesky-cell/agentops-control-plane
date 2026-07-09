@@ -43,9 +43,35 @@ class McpPlanAdapter(AgentAdapter):
         auto_approve: bool = False,
     ) -> str:
         run_id, workspace = gateway.start_run(task, self.name, source)
+        return self.run_existing(
+            gateway,
+            run_id,
+            workspace,
+            task=task,
+            source=source,
+            auto_approve=auto_approve,
+            metadata={
+                "adapter": "mcp-plan",
+                "plan_path": str(self.plan_path) if self.plan_path else "",
+                "source": str(Path(source).resolve()) if source is not None else "",
+                "task": task,
+            },
+        )
+
+    def run_existing(
+        self,
+        gateway: RuntimeGateway,
+        run_id: str,
+        workspace: Path,
+        task: str,
+        source: str | Path | None = None,
+        auto_approve: bool = False,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
         gateway.audit_store.set_run_metadata(
             run_id,
-            {
+            metadata
+            or {
                 "adapter": "mcp-plan",
                 "plan_path": str(self.plan_path) if self.plan_path else "",
                 "source": str(Path(source).resolve()) if source is not None else "",

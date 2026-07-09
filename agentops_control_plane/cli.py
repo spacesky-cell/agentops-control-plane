@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 from .agents import ScriptedAgent
 from .audit import AuditStore
+from .claude_code_adapter import ClaudeCodePlanAdapter, ClaudeCodePlanner
 from .config import PolicyConfig, load_policy, write_default_policy
 from .evaluator import run_eval
 from .exporter import export_html, export_json
@@ -23,6 +25,13 @@ def get_policy(args: argparse.Namespace) -> PolicyConfig:
 def get_home(args: argparse.Namespace) -> Path:
     home = getattr(args, "home", None)
     return Path(home).resolve() if home else Path.cwd()
+
+
+def last_event_message(store: AuditStore, run_id: str, event_type: str) -> str | None:
+    for event in reversed(store.get_events(run_id)):
+        if event["type"] == event_type:
+            return str(event["message"])
+    return None
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -45,6 +54,16 @@ def main(argv: list[str] | None = None) -> None:
     run_mcp_plan.add_argument("--source", help="Source directory copied into an isolated workspace")
     run_mcp_plan.add_argument("--task", default="Run MCP-style tool-call plan")
     run_mcp_plan.add_argument("--auto-approve", action="store_true")
+
+    run_claude_code_plan = sub.add_parser(
+        "run-claude-code-plan",
+        help="Ask Claude Code to generate a governed tool-call plan, then run it",
+    )
+    run_claude_code_plan.add_argument("--source", help="Source directory copied into an isolated workspace")
+    run_claude_code_plan.add_argument("--task", required=True)
+    run_claude_code_plan.add_argument("--auto-approve", action="store_true")
+    run_claude_code_plan.add_argument("--claude-command", default="claude", help="Claude Code command or executable path")
+    run_claude_code_plan.add_argument("--claude-timeout", type=int, default=120, help="Claude Code timeout in seconds")
 
     resume_script = sub.add_parser("resume-script", help="Resume a waiting scripted agent run")
     resume_script.add_argument("run_id")
@@ -128,6 +147,26 @@ def main(argv: list[str] | None = None) -> None:
         )
         run = store.get_run(run_id)
         print(json.dumps({"run_id": run_id, "status": run["status"]}, indent=2))
+        return
+
+    if args.command == "run-claude-code-plan":
+        planner = ClaudeCodePlanner(
+            command=args.claude_command,
+            timeout_seconds=args.claude_timeout,
+            runner=subprocess.run,
+        )
+        adapter = ClaudeCodePlanAdapter(planner=planner)
+        run_id = adapter.run(
+            gateway,
+            task=args.task,
+            source=args.source,
+            auto_approve=args.auto_approve,
+        )
+        run = store.get_run(run_id)
+        output = {"run_id": run_id, "status": run["status"]}
+        if run["status"] == "failed":
+            output["error"] = last_event_message(store, run_id, "claude_code_plan_failed") or "Claude Code failed."
+        print(json.dumps(output, indent=2))
         return
 
     if args.command == "resume-script":
