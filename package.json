@@ -1,0 +1,21 @@
+{
+  "name": "agentpermit",
+  "version": "0.2.0",
+  "description": "Vendor-neutral control plane for governed AI agent tool execution",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "agentpermit": "bin/agentpermit.js"
+  },
+  "files": [
+    "bin/agentpermit.js",
+    "agentpermit/*.py",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test tests/launcher.test.js tests/version.test.js"
+  }
+}

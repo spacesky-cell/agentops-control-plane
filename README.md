@@ -1,8 +1,8 @@
-# AgentOps Control Plane
+# AgentPermit
 
 [中文文档](README_CN.md)
 
-AgentOps Control Plane is a small, vendor-neutral runtime gateway for AI agents.
+AgentPermit is a small, vendor-neutral runtime gateway for AI agents.
 It does not try to replace Codex, Claude Code, LangGraph, or the OpenAI Agents SDK.
 It sits above agent backends and governs tool execution with policy, approval,
 audit logs, isolated workspaces, snapshots, and run reports.
@@ -39,20 +39,20 @@ This project is a portfolio-grade MVP for those concerns.
 ## Quick Start
 
 ```powershell
-git clone https://github.com/spacesky-cell/agentops-control-plane.git
-cd agentops-control-plane
-python -m agentops_control_plane run-script `
+git clone https://github.com/spacesky-cell/agentpermit.git
+cd agentpermit
+python -m agentpermit run-script `
   --plan examples\scripted_fix_agent.json `
   --source examples\sample_repo `
   --auto-approve
 ```
 
-Runtime data is stored under `.agentops/` in the current directory by default.
+Runtime data is stored under `.agentpermit/` in the current directory by default.
 Use `--home <path>` before the subcommand to store runs, workspaces, snapshots,
 and the SQLite audit database under a different project home:
 
 ```powershell
-python -m agentops_control_plane --home .demo run-script `
+python -m agentpermit --home .demo run-script `
   --plan examples\scripted_fix_agent.json `
   --source examples\sample_repo `
   --auto-approve
@@ -61,7 +61,7 @@ python -m agentops_control_plane --home .demo run-script `
 Run a local MCP-style tool-call plan through the same governance gateway:
 
 ```powershell
-python -m agentops_control_plane run-mcp-plan `
+python -m agentpermit run-mcp-plan `
   --plan examples\mcp_tool_plan.json `
   --source examples\sample_repo `
   --auto-approve
@@ -70,17 +70,17 @@ python -m agentops_control_plane run-mcp-plan `
 MCP-style plans also support the same approval/resume flow:
 
 ```powershell
-python -m agentops_control_plane approve <approval_id> --approver reviewer
-python -m agentops_control_plane resume-mcp-plan <run_id> `
+python -m agentpermit approve <approval_id> --approver reviewer
+python -m agentpermit resume-mcp-plan <run_id> `
   --plan examples\mcp_tool_plan.json `
   --approver reviewer
 ```
 
 Ask Claude Code to generate a governed tool-call plan, then execute that plan
-through the AgentOps gateway:
+through the AgentPermit gateway:
 
 ```powershell
-python -m agentops_control_plane run-claude-code-plan `
+python -m agentpermit run-claude-code-plan `
   --source examples\sample_repo `
   --task "Inspect math_utils.py and run the relevant test" `
   --auto-approve
@@ -99,14 +99,14 @@ JSON plan shaped like:
 ```
 
 Claude Code does not directly edit files or run shell commands in this mode.
-Every generated tool call is still evaluated by AgentOps policy, approval
+Every generated tool call is still evaluated by AgentPermit policy, approval
 rules, isolated workspaces, snapshots, and audit logs.
 
 On Windows, Python may need the real Claude Code executable rather than the
 PowerShell wrapper:
 
 ```powershell
-python -m agentops_control_plane run-claude-code-plan `
+python -m agentpermit run-claude-code-plan `
   --source examples\sample_repo `
   --task "List files" `
   --claude-command E:\Java\GlobalNodeModules\node_modules\@anthropic-ai\claude-code\bin\claude.exe
@@ -121,7 +121,7 @@ session, then rerun the command.
 Serve the thin JSON-lines stdio transport:
 
 ```powershell
-python -m agentops_control_plane serve-mcp-stdio
+python -m agentpermit serve-mcp-stdio
 ```
 
 It accepts newline-delimited JSON-RPC requests. Standard MCP-style clients
@@ -137,20 +137,20 @@ supported methods, JSON-RPC error semantics, and tool argument constraints.
 List runs:
 
 ```powershell
-python -m agentops_control_plane runs
+python -m agentpermit runs
 ```
 
 Show a run:
 
 ```powershell
-python -m agentops_control_plane show <run_id>
+python -m agentpermit show <run_id>
 ```
 
 Resume a run after approving a pending action:
 
 ```powershell
-python -m agentops_control_plane approve <approval_id> --approver reviewer
-python -m agentops_control_plane resume-script <run_id> `
+python -m agentpermit approve <approval_id> --approver reviewer
+python -m agentpermit resume-script <run_id> `
   --plan examples\scripted_fix_agent.json `
   --approver reviewer
 ```
@@ -158,13 +158,13 @@ python -m agentops_control_plane resume-script <run_id> `
 Export a report:
 
 ```powershell
-python -m agentops_control_plane export <run_id> --format html --out report.html
+python -m agentpermit export <run_id> --format html --out report.html
 ```
 
 Serve the local dashboard:
 
 ```powershell
-python -m agentops_control_plane serve --port 8765
+python -m agentpermit serve --port 8765
 ```
 
 The dashboard lists runs, traces, approval requests, and patch diffs. Pending
@@ -198,7 +198,7 @@ This repository intentionally includes source code, documentation, examples, and
 the `tests/` suite. Test source files are kept because they make the project
 verifiable for reviewers and recruiters.
 
-Generated runtime data is not committed. `.agentops/`, `.pytest_cache/`,
+Generated runtime data is not committed. `.agentpermit/`, `.pytest_cache/`,
 `__pycache__/`, exported demo reports, local environment files, and logs are
 ignored by `.gitignore`.
 
@@ -213,6 +213,6 @@ Agent backend -> Gateway -> Policy -> Tools -> Isolated workspace
 
 ## Resume-Ready Summary
 
-Built a vendor-neutral AgentOps control plane for AI agents with isolated
+Built AgentPermit, a vendor-neutral control plane for AI agents with isolated
 workspaces, policy-based tool execution, approval gates, command/file audit
 logs, snapshots, trace export, and deterministic evaluation demos.

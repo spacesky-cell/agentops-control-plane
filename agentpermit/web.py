@@ -279,7 +279,7 @@ def render_shell(title: str, content: str) -> str:
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="/">AgentOps Control Plane</a>
+      <a class="brand" href="/">AgentPermit</a>
       <nav class="nav-links" aria-label="Dashboard navigation">
         <a href="/">Runs</a>
         <a href="/approvals">Approvals</a>
@@ -309,7 +309,7 @@ def render_index(store: AuditStore) -> str:
     pending_count = sum(1 for approval in approvals if approval["status"] == "pending")
     content = (
         "<section class='page-header'>"
-        "<h1>AgentOps Control Plane</h1>"
+        "<h1>AgentPermit</h1>"
         "<p>Governed local agent runs with policy decisions, approvals, isolated workspaces, and audit traces.</p>"
         "</section>"
         "<section class='metric-grid' aria-label='Operational summary'>"
@@ -323,7 +323,7 @@ def render_index(store: AuditStore) -> str:
         f"{''.join(rows) or empty_row(5, 'No runs yet', 'Start with run-script or run-mcp-plan to create an auditable run.')}"
         "</tbody></table></section>"
     )
-    return render_shell("AgentOps Control Plane", content)
+    return render_shell("AgentPermit", content)
 
 
 def metric_card(label: str, value: int) -> str:
@@ -519,9 +519,9 @@ def resume_run(store: AuditStore, run_id: str, policy_config: PolicyConfig | Non
 
 
 def gateway_from_store(store: AuditStore, policy_config: PolicyConfig | None = None) -> RuntimeGateway:
-    agentops_dir = store.db_path.parent
+    agentpermit_dir = store.db_path.parent
     policy = policy_config or PolicyConfig()
-    workspace_manager = WorkspaceManager(agentops_dir)
+    workspace_manager = WorkspaceManager(agentpermit_dir)
     return RuntimeGateway(
         audit_store=store,
         workspace_manager=workspace_manager,
@@ -531,5 +531,5 @@ def gateway_from_store(store: AuditStore, policy_config: PolicyConfig | None = N
 
 
 def default_store(project_root: str | Path) -> AuditStore:
-    return AuditStore(Path(project_root) / ".agentops" / "runs.sqlite")
+    return AuditStore(Path(project_root) / ".agentpermit" / "runs.sqlite")
 

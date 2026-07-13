@@ -35,11 +35,11 @@ def last_event_message(store: AuditStore, run_id: str, event_type: str) -> str |
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="agentops", description="AgentOps Control Plane")
+    parser = argparse.ArgumentParser(prog="agentpermit", description="AgentPermit")
     parser.add_argument("--policy", help="Path to policy JSON file")
     parser.add_argument(
         "--home",
-        help="Project home where .agentops runtime data is stored. Defaults to the current directory.",
+        help="Project home where .agentpermit runtime data is stored. Defaults to the current directory.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 DEFAULT_EXCLUDES = {
     ".git",
-    ".agentops",
+    ".agentpermit",
     ".pytest_cache",
     "__pycache__",
     "node_modules",

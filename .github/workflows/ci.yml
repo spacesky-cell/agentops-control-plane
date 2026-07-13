@@ -37,4 +37,4 @@ jobs:
         run: python -m pytest -q
 
       - name: Run deterministic eval
-        run: python -m agentops_control_plane eval --tasks examples/tasks.jsonl --auto-approve
+        run: python -m agentpermit eval --tasks examples/tasks.jsonl --auto-approve

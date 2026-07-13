@@ -1,4 +1,4 @@
-.agentops/
+.agentpermit/
 __pycache__/
 *.pyc
 .pytest_cache/

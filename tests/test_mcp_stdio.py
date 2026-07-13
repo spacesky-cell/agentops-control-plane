@@ -2,9 +2,9 @@ import json
 from io import StringIO
 from pathlib import Path
 
-from agentops_control_plane import __version__
-from agentops_control_plane.gateway import RuntimeGateway
-from agentops_control_plane.mcp_stdio import McpStdioSession, serve_json_lines
+from agentpermit import __version__
+from agentpermit.gateway import RuntimeGateway
+from agentpermit.mcp_stdio import McpStdioSession, serve_json_lines
 
 
 def make_sample_repo(root: Path) -> Path:
@@ -128,7 +128,7 @@ def test_mcp_stdio_initialize_returns_server_capabilities(tmp_path):
 
     assert response["result"]["protocolVersion"] == "2025-06-18"
     assert response["result"]["serverInfo"] == {
-        "name": "agentops-control-plane",
+        "name": "agentpermit",
         "version": __version__,
     }
     assert response["result"]["capabilities"]["tools"] == {"listChanged": False}

@@ -135,7 +135,7 @@ class McpStdioSession:
                 "prompts": {"listChanged": False},
             },
             "serverInfo": {
-                "name": "agentops-control-plane",
+                "name": "agentpermit",
                 "version": __version__,
             },
         }

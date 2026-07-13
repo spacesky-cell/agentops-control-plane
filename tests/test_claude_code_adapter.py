@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from agentops_control_plane.claude_code_adapter import (
+from agentpermit.claude_code_adapter import (
     ClaudeCodePlanAdapter,
     ClaudeCodePlanner,
 )
-from agentops_control_plane.gateway import RuntimeGateway
+from agentpermit.gateway import RuntimeGateway
 
 
 def make_sample_repo(root: Path) -> Path:

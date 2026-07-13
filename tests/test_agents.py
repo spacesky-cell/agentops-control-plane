@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from agentops_control_plane.agents import AgentAdapter, ScriptedAgent
-from agentops_control_plane.gateway import RuntimeGateway
+from agentpermit.agents import AgentAdapter, ScriptedAgent
+from agentpermit.gateway import RuntimeGateway
 
 
 def make_sample_repo(root: Path) -> Path:

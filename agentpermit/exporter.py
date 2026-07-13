@@ -49,7 +49,7 @@ def export_html(store: AuditStore, run_id: str, out: str | Path) -> Path:
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>AgentOps Run {html.escape(run_id)}</title>
+  <title>AgentPermit Run {html.escape(run_id)}</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 32px; color: #17202a; }}
     table {{ border-collapse: collapse; width: 100%; }}
@@ -60,7 +60,7 @@ def export_html(store: AuditStore, run_id: str, out: str | Path) -> Path:
   </style>
 </head>
 <body>
-  <h1>AgentOps Run {html.escape(run_id)}</h1>
+  <h1>AgentPermit Run {html.escape(run_id)}</h1>
   <p><strong>Task:</strong> {html.escape(run['task'])}</p>
   <p><strong>Agent:</strong> {html.escape(run['agent_name'])}</p>
   <p><strong>Status:</strong> <span class="status">{html.escape(run['status'])}</span></p>

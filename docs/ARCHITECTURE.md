@@ -1,6 +1,6 @@
 # Architecture
 
-AgentOps Control Plane is intentionally a control layer, not a model provider
+AgentPermit is intentionally a control layer, not a model provider
 or IDE clone. Its job is to receive proposed tool actions from agents, decide
 whether the action is safe, execute it in an isolated workspace, and keep a
 complete audit trail.
@@ -77,7 +77,7 @@ environment-aware policies.
 
 ## WorkspaceManager
 
-Every run gets a copied workspace under `.agentops/workspaces/<run_id>`.
+Every run gets a copied workspace under `.agentpermit/workspaces/<run_id>`.
 Source repositories are never modified directly. The manager also creates
 before/after zip snapshots for audit and recovery.
 

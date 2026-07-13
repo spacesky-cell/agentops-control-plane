@@ -81,7 +81,7 @@ class ClaudeCodePlanner:
         tool_schema = json.dumps(list_tool_definitions(), ensure_ascii=False, indent=2)
         return "\n".join(
             [
-                "You are generating a governed AgentOps tool plan.",
+                "You are generating a governed AgentPermit tool plan.",
                 "Do not edit files or run commands yourself.",
                 "Return only JSON with this exact shape:",
                 '{"name":"claude-code-plan","tool_calls":[{"name":"list_files","arguments":{}}]}',

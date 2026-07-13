@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from agentops_control_plane.gateway import RuntimeGateway
-from agentops_control_plane.mcp_adapter import McpPlanAdapter
+from agentpermit.gateway import RuntimeGateway
+from agentpermit.mcp_adapter import McpPlanAdapter
 
 
 def make_sample_repo(root: Path) -> Path:

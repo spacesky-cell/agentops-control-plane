@@ -5,7 +5,7 @@ from pathlib import Path
 
 import subprocess
 
-from agentops_control_plane import cli
+from agentpermit import cli
 
 
 def make_sample_repo(root: Path) -> Path:
@@ -70,7 +70,7 @@ def make_mcp_patch_plan(root: Path) -> Path:
     return plan
 
 
-def test_cli_uses_current_working_directory_for_agentops_home(tmp_path, monkeypatch, capsys):
+def test_cli_uses_current_working_directory_for_agentpermit_home(tmp_path, monkeypatch, capsys):
     source = make_sample_repo(tmp_path)
     plan = make_plan(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -79,10 +79,10 @@ def test_cli_uses_current_working_directory_for_agentops_home(tmp_path, monkeypa
 
     output = json.loads(capsys.readouterr().out)
     assert output["status"] == "success"
-    assert (tmp_path / ".agentops" / "runs.sqlite").exists()
+    assert (tmp_path / ".agentpermit" / "runs.sqlite").exists()
 
 
-def test_cli_home_option_overrides_agentops_home(tmp_path, monkeypatch, capsys):
+def test_cli_home_option_overrides_agentpermit_home(tmp_path, monkeypatch, capsys):
     source = make_sample_repo(tmp_path)
     plan = make_plan(tmp_path)
     custom_home = tmp_path / "custom-home"
@@ -92,8 +92,8 @@ def test_cli_home_option_overrides_agentops_home(tmp_path, monkeypatch, capsys):
 
     output = json.loads(capsys.readouterr().out)
     assert output["status"] == "success"
-    assert (custom_home / ".agentops" / "runs.sqlite").exists()
-    assert not (tmp_path / ".agentops" / "runs.sqlite").exists()
+    assert (custom_home / ".agentpermit" / "runs.sqlite").exists()
+    assert not (tmp_path / ".agentpermit" / "runs.sqlite").exists()
 
 
 def test_cli_runs_mcp_plan(tmp_path, monkeypatch, capsys):

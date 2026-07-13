@@ -1,4 +1,4 @@
-"""AgentOps Control Plane.
+"""AgentPermit.
 
 A small vendor-neutral governance layer for AI agent tool execution.
 """

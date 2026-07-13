@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from agentops_control_plane.models import Decision, ToolRequest
-from agentops_control_plane.policy import PolicyEngine
+from agentpermit.models import Decision, ToolRequest
+from agentpermit.policy import PolicyEngine
 
 
 def test_denies_workspace_escape():

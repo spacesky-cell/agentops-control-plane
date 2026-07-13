@@ -2,11 +2,11 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from threading import Thread
 
-from agentops_control_plane.audit import AuditStore
-from agentops_control_plane.config import PolicyConfig
-from agentops_control_plane.gateway import RuntimeGateway
-from agentops_control_plane.mcp_adapter import McpPlanAdapter
-from agentops_control_plane.web import Dashboard, render_approvals, render_index, render_run, safe_return_to
+from agentpermit.audit import AuditStore
+from agentpermit.config import PolicyConfig
+from agentpermit.gateway import RuntimeGateway
+from agentpermit.mcp_adapter import McpPlanAdapter
+from agentpermit.web import Dashboard, render_approvals, render_index, render_run, safe_return_to
 
 
 def make_sample_repo(root):

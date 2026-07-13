@@ -29,11 +29,11 @@ class RuntimeGateway:
     @classmethod
     def from_home(cls, home: str | Path, config: PolicyConfig | None = None) -> "RuntimeGateway":
         root = Path(home)
-        agentops_dir = root / ".agentops"
+        agentpermit_dir = root / ".agentpermit"
         policy_config = config or PolicyConfig()
-        workspace_manager = WorkspaceManager(agentops_dir)
+        workspace_manager = WorkspaceManager(agentpermit_dir)
         return cls(
-            audit_store=AuditStore(agentops_dir / "runs.sqlite"),
+            audit_store=AuditStore(agentpermit_dir / "runs.sqlite"),
             workspace_manager=workspace_manager,
             policy_engine=PolicyEngine(policy_config),
             tool_executor=ToolExecutor(workspace_manager, policy_config),

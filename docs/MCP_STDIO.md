@@ -1,21 +1,21 @@
 # MCP Stdio Transport
 
-`serve-mcp-stdio` exposes AgentOps Control Plane through newline-delimited
+`serve-mcp-stdio` exposes AgentPermit through newline-delimited
 JSON-RPC over stdin/stdout. It is intended for local MCP-style clients that
 need governed tool execution, audit logs, approval gates, and isolated
-workspaces without embedding AgentOps Python APIs directly.
+workspaces without embedding AgentPermit Python APIs directly.
 
 ## Start The Server
 
 ```powershell
-python -m agentops_control_plane serve-mcp-stdio
+python -m agentpermit serve-mcp-stdio
 ```
 
 Use the global `--home` option before the subcommand to choose where runtime
 data is stored:
 
 ```powershell
-python -m agentops_control_plane --home .demo serve-mcp-stdio
+python -m agentpermit --home .demo serve-mcp-stdio
 ```
 
 The server reads one JSON object per line from stdin and writes one JSON-RPC
@@ -54,7 +54,7 @@ Response shape:
       "prompts": {"listChanged": false}
     },
     "serverInfo": {
-      "name": "agentops-control-plane",
+      "name": "agentpermit",
       "version": "0.1.0"
     }
   }

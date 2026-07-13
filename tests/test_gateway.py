@@ -2,10 +2,10 @@ import json
 import zipfile
 from pathlib import Path
 
-from agentops_control_plane.agents import ScriptedAgent
-from agentops_control_plane.audit import ApprovalNotFoundError
-from agentops_control_plane.gateway import RuntimeGateway
-from agentops_control_plane.models import ToolRequest
+from agentpermit.agents import ScriptedAgent
+from agentpermit.audit import ApprovalNotFoundError
+from agentpermit.gateway import RuntimeGateway
+from agentpermit.models import ToolRequest
 
 
 def make_sample_repo(root: Path) -> Path:
@@ -223,14 +223,14 @@ def test_snapshots_include_workspace_files(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
 
     run_id, workspace = gateway.start_run("snapshot sample repo", "test-agent", source)
-    before_snapshot = tmp_path / "project" / ".agentops" / "snapshots" / f"{run_id}-before.zip"
+    before_snapshot = tmp_path / "project" / ".agentpermit" / "snapshots" / f"{run_id}-before.zip"
 
     with zipfile.ZipFile(before_snapshot) as archive:
         assert "math_utils.py" in archive.namelist()
         assert "test_math_utils.py" in archive.namelist()
 
     gateway.finish_run(run_id, workspace, "success")
-    after_snapshot = tmp_path / "project" / ".agentops" / "snapshots" / f"{run_id}-after.zip"
+    after_snapshot = tmp_path / "project" / ".agentpermit" / "snapshots" / f"{run_id}-after.zip"
 
     with zipfile.ZipFile(after_snapshot) as archive:
         assert "math_utils.py" in archive.namelist()
@@ -282,7 +282,7 @@ def test_waiting_for_approval_keeps_run_open(tmp_path):
     run_id = agent.run(gateway, "approval required", source=source, auto_approve=False)
     run = gateway.audit_store.get_run(run_id)
     events = gateway.audit_store.get_events(run_id)
-    after_snapshot = tmp_path / "project" / ".agentops" / "snapshots" / f"{run_id}-after.zip"
+    after_snapshot = tmp_path / "project" / ".agentpermit" / "snapshots" / f"{run_id}-after.zip"
 
     assert run["status"] == "waiting_for_approval"
     assert run["ended_at"] is None
