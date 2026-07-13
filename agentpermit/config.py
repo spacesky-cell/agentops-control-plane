@@ -7,45 +7,30 @@ from pathlib import Path, PurePosixPath
 
 @dataclass
 class PolicyConfig:
-    command_allow_prefixes: list[str] = field(
+    command_allow_prefixes: list[list[str]] = field(
         default_factory=lambda: [
-            "python -m unittest",
-            "python -m pytest",
-            "pytest",
-            "git diff",
-            "git status",
-            "npm test",
-            "pnpm test",
-            "pnpm run test",
+            ["python", "-m", "unittest"],
+            ["python", "-m", "pytest"],
+            ["pytest"],
+            ["git", "diff"],
+            ["git", "status"],
+            ["npm", "test"],
+            ["pnpm", "test"],
+            ["pnpm", "run", "test"],
         ]
     )
-    command_deny_contains: list[str] = field(
+    command_deny_prefixes: list[list[str]] = field(
         default_factory=lambda: [
-            "rm -rf",
-            "remove-item",
-            " del ",
-            "format ",
-            "shutdown",
-            "git push",
-            "git reset --hard",
-            "curl ",
-            "wget ",
-            "invoke-webrequest",
-        ]
-    )
-    command_deny_shell_tokens: list[str] = field(
-        default_factory=lambda: [
-            "&&",
-            "&",
-            "||",
-            ";",
-            "|",
-            ">",
-            "<",
-            "`",
-            "$(",
-            "\n",
-            "\r",
+            ["rm", "-rf"],
+            ["Remove-Item"],
+            ["del"],
+            ["format"],
+            ["shutdown"],
+            ["git", "push"],
+            ["git", "reset", "--hard"],
+            ["curl"],
+            ["wget"],
+            ["Invoke-WebRequest"],
         ]
     )
     protected_globs: list[str] = field(
@@ -117,6 +102,31 @@ class PolicyConfig:
     unknown_command_requires_approval: bool = True
     max_command_seconds: int = 30
     max_output_chars: int = 8000
+
+    def __post_init__(self) -> None:
+        self._validate_command_rules("command_allow_prefixes", self.command_allow_prefixes)
+        self._validate_command_rules("command_deny_prefixes", self.command_deny_prefixes)
+        self._validate_positive_int("max_command_seconds", self.max_command_seconds)
+        self._validate_positive_int("max_output_chars", self.max_output_chars)
+
+    @staticmethod
+    def _validate_command_rules(name: str, rules: list[list[str]]) -> None:
+        if not isinstance(rules, list):
+            raise ValueError(f"{name} must be a list of argv-prefix arrays.")
+        for index, rule in enumerate(rules):
+            if (
+                not isinstance(rule, list)
+                or not rule
+                or any(not isinstance(element, str) or not element for element in rule)
+            ):
+                raise ValueError(
+                    f"{name}[{index}] must be a non-empty array of non-empty strings."
+                )
+
+    @staticmethod
+    def _validate_positive_int(name: str, value: object) -> None:
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"{name} must be a positive integer.")
 
 
 def is_protected_path(path: str | Path, protected_globs: list[str]) -> bool:

@@ -65,12 +65,11 @@ deterministic scripts that do not need the MCP session lifecycle.
 
 The current policy engine is JSON-configured and deterministic. It supports:
 
-- command allowlists
-- dangerous command deny patterns
-- shell control token denial before command execution
+- exact argv-prefix command allowlists
+- exact argv-prefix command denylists, evaluated before allowlists
 - protected file patterns
 - approval requirements for writes and patches
-- max command runtime and output size
+- max command runtime and bounded, continuously drained output
 
 This can later be extended with organization, repository, branch, user, or
 environment-aware policies.
@@ -94,9 +93,19 @@ The MVP toolset is deliberately small:
 This is enough to demonstrate code-agent workflows while keeping risk and
 testability under control.
 
-Commands are parsed into argv and executed with `shell=False`. The policy layer
-rejects shell control tokens such as `&&`, `|`, redirection, and newlines before
-the executor runs the command.
+Commands enter the system as structured `program` and `args` values and execute
+with `shell=False`; command strings are not parsed or accepted. The executor uses
+a minimal environment, continuously drains bounded output, and terminates the
+whole process group when a command times out. Output is decoded as UTF-8 with
+replacement characters for invalid byte sequences. The configured deadline
+covers both process exit and pipe draining; tree termination and reader cleanup
+receive at most one additional second of bounded cleanup grace.
+
+The executor owns raw stdout/stderr pipe descriptors directly; reader threads
+incrementally decode each stream and descriptor ownership is closed exactly once.
+On Windows, executable paths are strictly canonicalized before launch, batch and
+script files are rejected, and logical npm/pnpm commands use `node.exe` with known
+JavaScript CLI entrypoints instead of executing command shims.
 
 ## AuditStore
 

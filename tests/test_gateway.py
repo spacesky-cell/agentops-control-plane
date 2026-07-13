@@ -46,7 +46,10 @@ def test_scripted_agent_runs_in_isolated_workspace(tmp_path):
                 "tool": "patch_text",
                 "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
             },
-            {"tool": "run_command", "args": {"command": "python -m unittest -q"}},
+            {
+                "tool": "run_command",
+                "args": {"program": "python", "args": ["-m", "unittest", "-q"]},
+            },
         ],
     )
 
@@ -60,6 +63,46 @@ def test_scripted_agent_runs_in_isolated_workspace(tmp_path):
     assert "return a + b" in (workspace / "math_utils.py").read_text(encoding="utf-8")
     assert any(event["type"] == "approval_auto_approved" for event in events)
     assert any(event["type"] == "tool_executed" for event in events)
+    command_event = next(
+        event
+        for event in events
+        if event["type"] == "tool_executed" and event["tool_name"] == "run_command"
+    )
+    assert command_event["payload"]["args"] == {
+        "program": "python",
+        "args": [
+            "-m",
+            {
+                "content_chars": 8,
+                "content_sha256": hashlib.sha256(b"unittest").hexdigest(),
+            },
+            "-q",
+        ],
+    }
+    assert command_event["payload"]["output"]["program"] == "python"
+    assert command_event["payload"]["output"]["args"][0] == "-m"
+    assert command_event["payload"]["output"]["args"][1]["content_chars"] == 8
+    assert command_event["payload"]["output"]["args"][2] == "-q"
+    assert set(command_event["payload"]["output"]["output"]) == {
+        "content_chars",
+        "content_sha256",
+    }
+
+
+def test_gateway_denies_non_mapping_structured_command_args_without_raising(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    run_id, workspace = gateway.start_run("malformed command", "test-agent")
+
+    for malformed_args in (None, 42, "python -m unittest", ["python", "-m", "unittest"]):
+        result = gateway.execute_tool(
+            run_id,
+            workspace,
+            ToolRequest("run_command", malformed_args),
+        )
+
+        assert result.status.value == "denied"
+        assert result.decision is not None
+        assert result.decision.decision.value == "deny"
 
 
 def test_scripted_agent_pauses_without_auto_approval(tmp_path):
@@ -72,7 +115,10 @@ def test_scripted_agent_pauses_without_auto_approval(tmp_path):
                 "tool": "patch_text",
                 "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
             },
-            {"tool": "run_command", "args": {"command": "python -m unittest -q"}},
+            {
+                "tool": "run_command",
+                "args": {"program": "python", "args": ["-m", "unittest", "-q"]},
+            },
         ],
     )
 
@@ -95,7 +141,10 @@ def test_scripted_agent_resumes_after_approval(tmp_path):
                 "tool": "patch_text",
                 "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
             },
-            {"tool": "run_command", "args": {"command": "python -m unittest -q"}},
+            {
+                "tool": "run_command",
+                "args": {"program": "python", "args": ["-m", "unittest", "-q"]},
+            },
         ],
     )
 
@@ -120,7 +169,10 @@ def test_scripted_agent_does_not_resume_after_rejection(tmp_path):
                 "tool": "patch_text",
                 "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
             },
-            {"tool": "run_command", "args": {"command": "python -m unittest -q"}},
+            {
+                "tool": "run_command",
+                "args": {"program": "python", "args": ["-m", "unittest", "-q"]},
+            },
         ],
     )
 

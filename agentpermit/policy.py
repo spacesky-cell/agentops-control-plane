@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .config import PolicyConfig, is_protected_path
-from .models import Decision, PolicyDecision, Risk, ToolRequest
+from .models import Decision, PolicyDecision, Risk, ToolRequest, structured_command_argv
 
 
 class PolicyEngine:
@@ -70,28 +70,19 @@ class PolicyEngine:
         return PolicyDecision(Decision.ALLOW, Risk.MEDIUM, "Patch allowed by policy.")
 
     def _evaluate_command(self, request: ToolRequest) -> PolicyDecision:
-        command = str(request.args.get("command", "")).strip()
-        if not command:
-            return PolicyDecision(Decision.DENY, Risk.MEDIUM, "Missing command.")
-        lowered = f" {command.lower()} "
-        for denied in self.config.command_deny_contains:
-            if denied.lower() in lowered:
+        try:
+            argv = structured_command_argv(request.args)
+        except ValueError as exc:
+            return PolicyDecision(Decision.DENY, Risk.MEDIUM, str(exc))
+        for denied in self.config.command_deny_prefixes:
+            if argv[: len(denied)] == denied:
                 return PolicyDecision(
                     Decision.DENY,
                     Risk.CRITICAL,
-                    f"Command matches denied pattern: {denied}",
-                )
-        for token in self.config.command_deny_shell_tokens:
-            if token in command:
-                return PolicyDecision(
-                    Decision.DENY,
-                    Risk.CRITICAL,
-                    f"Command contains shell control token: {token}",
+                    f"Command matches denied argv prefix: {denied!r}",
                 )
         for prefix in self.config.command_allow_prefixes:
-            lowered_command = command.lower()
-            lowered_prefix = prefix.lower()
-            if lowered_command == lowered_prefix or lowered_command.startswith(f"{lowered_prefix} "):
+            if argv[: len(prefix)] == prefix:
                 return PolicyDecision(Decision.ALLOW, Risk.LOW, "Command matches allowlist.")
         if self.config.unknown_command_requires_approval:
             return PolicyDecision(

@@ -436,6 +436,48 @@ def test_mcp_stdio_tools_call_reports_wrong_argument_type_as_mcp_error(tmp_path)
     assert "string" in response["result"]["content"][0]["text"]
 
 
+def test_mcp_stdio_tools_call_rejects_wrong_array_item_type(tmp_path):
+    source = make_sample_repo(tmp_path)
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    session = McpStdioSession(gateway)
+    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "start",
+            "method": "run.start",
+            "params": {
+                "task": "stdio invalid argv",
+                "agent_name": "stdio-agent",
+                "source": str(source),
+            },
+        }
+    )
+
+    response = session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "command",
+            "method": "tools/call",
+            "params": {
+                "name": "run_command",
+                "arguments": {
+                    "program": "tool",
+                    "args": [{"ordinary": "mcp-wrong-type-secret"}],
+                },
+            },
+        }
+    )
+
+    assert "error" not in response
+    assert response["result"]["isError"] is True
+    assert response["result"]["content"][0]["text"] == (
+        "Invalid tools/call arguments: args[0] must be a string."
+    )
+    assert gateway.audit_store.list_approvals(session.run_id) == []
+
+
 def test_mcp_stdio_tools_call_reports_unknown_tool_as_mcp_error(tmp_path):
     source = make_sample_repo(tmp_path)
     gateway = RuntimeGateway.from_home(tmp_path / "project")

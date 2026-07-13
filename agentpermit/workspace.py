@@ -41,6 +41,12 @@ class _DirectoryLease:
 
 
 @dataclass(frozen=True)
+class CommandCwdLease:
+    cwd: str
+    pass_fds: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class _PathAccess:
     path: Path
     parent: _DirectoryLease
@@ -116,6 +122,20 @@ class WorkspaceManager:
 
     def workspace_identity(self, workspace: str | Path) -> tuple[int, int]:
         return self._trusted_root(workspace).identity
+
+    @contextmanager
+    def command_cwd_lease(
+        self, workspace: str | Path
+    ) -> Iterator[CommandCwdLease]:
+        root = self._trusted_root(workspace)
+        with self._directory_lease(root) as lease:
+            if os.name == "nt":
+                yield CommandCwdLease(str(root.path))
+                return
+            if lease.fd is None:
+                raise WorkspaceIntegrityError("Workspace command lease has no directory fd.")
+            fd_path = self._fd_directory_path(lease.fd)
+            yield CommandCwdLease(fd_path, (lease.fd,))
 
     def register_workspace(
         self, workspace: str | Path, authoritative_identity: tuple[int, int]
@@ -700,6 +720,15 @@ class WorkspaceManager:
                 f"Workspace root changed during access: {path}"
             )
         return _DirectoryState(path, identity, "Workspace root")
+
+    def _fd_directory_path(self, fd: int) -> str:
+        for prefix in ("/proc/self/fd", "/dev/fd"):
+            candidate = f"{prefix}/{fd}"
+            if os.path.isdir(candidate):
+                return candidate
+        raise WorkspaceIntegrityError(
+            "This POSIX platform cannot bind a command cwd to the workspace directory fd."
+        )
 
     def _collect_protected_identities(
         self,

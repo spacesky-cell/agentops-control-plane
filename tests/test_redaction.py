@@ -5,7 +5,13 @@ import sqlite3
 import pytest
 
 from agentpermit.audit import AuditStore
-from agentpermit.redaction import REDACTED, redact_durable, redact_text, summarize_content
+import agentpermit.redaction as redaction_module
+from agentpermit.redaction import (
+    REDACTED,
+    redact_durable,
+    redact_text,
+    summarize_content,
+)
 
 
 @pytest.mark.parametrize(
@@ -297,3 +303,375 @@ def test_audit_store_never_persists_common_credential_fragments(tmp_path):
     assert "ordinary-agent" in persisted
     assert persisted.count(REDACTED) == 2 * len(credentials)
     assert all(fragment not in persisted for fragment in secret_fragments)
+
+
+def test_redact_durable_summarizes_command_values_and_redacts_secret_flags():
+    command = {
+        "program": "https://user:pass@example.com/tool",
+        "args": [
+            "--password",
+            "plain-secret",
+            "--user",
+            "alice:secret",
+            "--token=plain",
+            "positional-secret",
+            "--verbose",
+            "-pplain-secret",
+            "--token:colon-secret",
+            "--",
+            "-dash-secret",
+            "-1",
+        ],
+    }
+
+    durable = redact_durable(command)
+
+    assert durable == {
+        "program": "https://[redacted]@example.com/tool",
+        "args": [
+            "--password",
+            REDACTED,
+            "--user",
+            summarize_content("alice:secret"),
+            "--token=[redacted]",
+            summarize_content("positional-secret"),
+            "--verbose",
+            summarize_content("-pplain-secret"),
+            "--token:[redacted]",
+            "--",
+            summarize_content("-dash-secret"),
+            summarize_content("-1"),
+        ],
+    }
+
+
+def test_command_values_never_reach_raw_sqlite_payloads(tmp_path):
+    secrets = (
+        "plain-secret",
+        "alice:secret",
+        "plain",
+        "positional-secret",
+        "url-user:url-pass",
+        "attached-secret",
+        "colon-secret",
+        "dash-secret",
+    )
+    command = {
+        "program": f"https://{secrets[4]}@example.com/tool",
+        "args": [
+            "--password",
+            secrets[0],
+            "--user",
+            secrets[1],
+            f"--token={secrets[2]}",
+            secrets[3],
+            f"-p{secrets[5]}",
+            f"--token:{secrets[6]}",
+            "--",
+            f"-{secrets[7]}",
+        ],
+    }
+    result = {
+        **command,
+        "exit_code": 0,
+        "output": "ok",
+        "output_truncated": False,
+        "timed_out": False,
+    }
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("command redaction", "test-agent", tmp_path / "workspace")
+    store.add_event(run_id, "command", "ordinary", {"request": command, "result": result})
+    store.create_approval(run_id, "run_command", {"args": command}, "review")
+
+    with sqlite3.connect(store.db_path) as conn:
+        persisted = "\n".join(
+            row[0]
+            for row in conn.execute(
+                "SELECT payload_json FROM events UNION ALL "
+                "SELECT payload_json FROM approvals"
+            )
+        )
+
+    assert all(secret not in persisted for secret in secrets)
+    assert "--password" in persisted
+    assert "--user" in persisted
+    assert "--token=[redacted]" in persisted
+    assert "--token:[redacted]" in persisted
+    assert "https://[redacted]@example.com/tool" in persisted
+
+
+@pytest.mark.parametrize(
+    ("malformed", "secrets"),
+    [
+        ({"command": "python legacy-secret-value"}, ("legacy-secret-value",)),
+        (
+            {
+                "program": "tool",
+                "args": ["ordinary-secret-value"],
+                "extra": "extra-secret-value",
+            },
+            ("ordinary-secret-value", "extra-secret-value"),
+        ),
+        ({"program": "missing-args-secret"}, ("missing-args-secret",)),
+        (
+            {"program": ["wrong-program-secret"], "args": "wrong-args-secret"},
+            ("wrong-program-secret", "wrong-args-secret"),
+        ),
+        (
+            {
+                "program": "tool",
+                "args": [],
+                "status": "plain-status-secret",
+                "ordinary_extra": {"nested-ghp_abcdefghijklmnopqrstuvwxyz": "nested-secret"},
+                "token-ghp_abcdefghijklmnopqrstuvwxyz": "key-secret",
+            },
+            (
+                "plain-status-secret",
+                "ghp_abcdefghijklmnopqrstuvwxyz",
+                "nested-secret",
+                "key-secret",
+            ),
+        ),
+    ],
+)
+def test_tool_aware_redaction_fails_safe_for_malformed_command_args(
+    malformed, secrets
+):
+    durable = redaction_module.redact_tool_args("run_command", malformed)
+    serialized = str(durable)
+
+    assert all(secret not in serialized for secret in secrets)
+    assert "ordinary_extra" in durable or "ordinary_extra" not in malformed
+
+
+def test_tool_aware_redaction_rejects_nested_non_string_command_args():
+    malformed = {
+        "program": "tool",
+        "args": [{"ordinary": "wrong-type-secret"}],
+    }
+
+    durable = redaction_module.redact_tool_args("run_command", malformed)
+
+    assert "wrong-type-secret" not in str(durable)
+    assert durable["program"] == summarize_content("tool")
+    assert durable["args"][0]["ordinary"] == summarize_content(
+        "wrong-type-secret"
+    )
+
+
+def test_redact_durable_routes_malformed_command_shape_to_fail_safe_redaction():
+    malformed = {
+        "program": "tool",
+        "args": [{"ordinary": "direct-wrong-type-secret"}],
+    }
+
+    durable = redact_durable(malformed)
+
+    assert "direct-wrong-type-secret" not in str(durable)
+    assert durable["program"] == summarize_content("tool")
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid", "secret"),
+    [
+        ("exit_code", "exit-code-secret", "exit-code-secret"),
+        (
+            "output",
+            {
+                "content_chars": "output-length-secret",
+                "content_sha256": "output-hash-secret",
+            },
+            "output-hash-secret",
+        ),
+        ("output_truncated", "truncation-secret", "truncation-secret"),
+        ("timed_out", "timeout-secret", "timeout-secret"),
+    ],
+)
+def test_tool_aware_redaction_rejects_malformed_command_result_fields(
+    field, invalid, secret
+):
+    malformed = {
+        "program": "tool",
+        "args": ["--version"],
+        "exit_code": 0,
+        "output": "ok",
+        "output_truncated": False,
+        "timed_out": False,
+    }
+    malformed[field] = invalid
+
+    durable = redaction_module.redact_tool_payload("run_command", malformed)
+
+    assert secret not in str(durable)
+    assert durable["program"] == summarize_content("tool")
+
+
+def test_tool_aware_redaction_accepts_valid_safe_command_result_summary():
+    safe_output = summarize_content("ok")
+    result = {
+        "program": "tool",
+        "args": ["--version"],
+        "exit_code": None,
+        "output": safe_output,
+        "output_truncated": False,
+        "timed_out": True,
+    }
+
+    durable = redaction_module.redact_tool_payload("run_command", result)
+
+    assert durable == {
+        **result,
+        "args": ["--version"],
+    }
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        ["non-object-secret"],
+        "non-object-secret",
+        42,
+        None,
+    ],
+)
+def test_tool_aware_redaction_handles_non_object_command_args(malformed):
+    durable = redaction_module.redact_tool_args("run_command", malformed)
+
+    assert "non-object-secret" not in str(durable)
+
+
+def test_malformed_command_denials_and_approvals_never_reach_raw_sqlite(tmp_path):
+    from agentpermit.gateway import RuntimeGateway
+    from agentpermit.models import ToolRequest
+
+    source = tmp_path / "source"
+    source.mkdir()
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    run_id, workspace = gateway.start_run("malformed redaction", "test-agent", source)
+    malformed_requests = [
+        {"command": "python denied-legacy-secret"},
+        {
+            "program": "tool",
+            "args": ["denied-arg-secret"],
+            "extra": "denied-extra-secret",
+        },
+        {"program": "denied-missing-secret"},
+        {"program": ["denied-program-type"], "args": "denied-args-type"},
+        {
+            "program": "tool",
+            "args": [],
+            "status": "plain-status-secret",
+            "ordinary_extra": "ordinary-extra-secret",
+            "key-ghp_abcdefghijklmnopqrstuvwxyz": "key-value-secret",
+        },
+        {
+            "program": "tool",
+            "args": [{"ordinary": "denied-nested-type-secret"}],
+        },
+    ]
+    secrets = tuple(
+        value
+        for request in malformed_requests
+        for value in (
+            "denied-legacy-secret",
+            "denied-arg-secret",
+            "denied-extra-secret",
+            "denied-missing-secret",
+            "denied-program-type",
+            "denied-args-type",
+            "plain-status-secret",
+            "ordinary-extra-secret",
+            "ghp_abcdefghijklmnopqrstuvwxyz",
+            "key-value-secret",
+            "denied-nested-type-secret",
+        )
+        if value in str(request)
+    )
+    for request in malformed_requests:
+        result = gateway.execute_tool(
+            run_id, workspace, ToolRequest("run_command", request)
+        )
+        assert result.status.value == "denied"
+        gateway.audit_store.create_approval(
+            run_id,
+            "run_command",
+            {"args": request, "status": "denied"},
+            "malformed request",
+        )
+
+    with sqlite3.connect(gateway.audit_store.db_path) as conn:
+        persisted = "\n".join(
+            row[0]
+            for row in conn.execute(
+                "SELECT payload_json FROM events UNION ALL "
+                "SELECT payload_json FROM approvals"
+            )
+        )
+
+    assert all(secret not in persisted for secret in secrets)
+    assert '"ordinary_extra"' in persisted
+    assert "key-[redacted]" in persisted
+
+
+def test_malformed_command_results_never_reach_raw_sqlite(tmp_path):
+    result = {
+        "program": "tool",
+        "args": ["--version"],
+        "exit_code": "sqlite-exit-secret",
+        "output": {
+            "content_chars": "sqlite-length-secret",
+            "content_sha256": "sqlite-hash-secret",
+        },
+        "output_truncated": "sqlite-truncation-secret",
+        "timed_out": "sqlite-timeout-secret",
+    }
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("malformed result", "test-agent", tmp_path / "workspace")
+
+    store.add_event(
+        run_id,
+        "tool_failed",
+        "malformed result",
+        {"output": result, "args": ["sqlite-non-object-secret"]},
+        tool_name="run_command",
+        decision="deny",
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        persisted = conn.execute("SELECT payload_json FROM events").fetchone()[0]
+
+    assert all(
+        secret not in persisted
+        for secret in (
+            "sqlite-exit-secret",
+            "sqlite-length-secret",
+            "sqlite-hash-secret",
+            "sqlite-truncation-secret",
+            "sqlite-timeout-secret",
+            "sqlite-non-object-secret",
+        )
+    )
+
+
+def test_known_token_signature_inside_value_free_flag_is_redacted_in_sqlite(tmp_path):
+    token = "ghp_abcdefghijklmnopqrstuvwxyz"
+    command = {"program": "tool", "args": [f"--{token}"]}
+
+    durable = redaction_module.redact_tool_args("run_command", command)
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id = store.start_run("flag token", "test-agent", tmp_path / "workspace")
+    store.add_event(
+        run_id,
+        "policy_decision",
+        "denied",
+        {"args": command},
+        tool_name="run_command",
+        decision="deny",
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        persisted = conn.execute("SELECT payload_json FROM events").fetchone()[0]
+
+    assert durable["args"] == ["--[redacted]"]
+    assert token not in persisted
+    assert "--[redacted]" in persisted

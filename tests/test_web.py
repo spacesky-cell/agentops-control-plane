@@ -370,7 +370,13 @@ def test_dashboard_post_resumes_approved_mcp_plan(tmp_path):
                 "name": "patch_text",
                 "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
             },
-            {"name": "run_command", "arguments": {"command": "python -m unittest -q"}},
+            {
+                "name": "run_command",
+                "arguments": {
+                    "program": "python",
+                    "args": ["-m", "unittest", "-q"],
+                },
+            },
         ],
     )
     gateway = RuntimeGateway.from_home(tmp_path / "project")
@@ -438,7 +444,13 @@ def test_dashboard_post_resume_uses_served_policy_for_remaining_tools(tmp_path):
                 "name": "patch_text",
                 "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
             },
-            {"name": "run_command", "arguments": {"command": "python -m unittest -q"}},
+            {
+                "name": "run_command",
+                "arguments": {
+                    "program": "python",
+                    "args": ["-m", "unittest", "-q"],
+                },
+            },
         ],
     )
     policy = PolicyConfig(command_allow_prefixes=[])

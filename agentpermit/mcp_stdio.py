@@ -222,9 +222,21 @@ class McpStdioSession:
                 if field not in properties:
                     return f"Invalid tools/call arguments: unexpected field: {field}."
         for field, value in arguments.items():
-            expected = properties.get(field, {}).get("type")
+            field_schema = properties.get(field, {})
+            expected = field_schema.get("type")
             if expected == "string" and not isinstance(value, str):
                 return f"Invalid tools/call arguments: {field} must be a string."
+            if expected == "array":
+                if not isinstance(value, list):
+                    return f"Invalid tools/call arguments: {field} must be an array."
+                item_type = field_schema.get("items", {}).get("type")
+                if item_type == "string":
+                    for index, item in enumerate(value):
+                        if not isinstance(item, str):
+                            return (
+                                "Invalid tools/call arguments: "
+                                f"{field}[{index}] must be a string."
+                            )
         return None
 
     def _stringify_tool_output(self, output: Any) -> str:

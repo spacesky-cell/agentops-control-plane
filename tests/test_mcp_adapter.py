@@ -52,7 +52,13 @@ def test_mcp_plan_adapter_runs_tool_calls_through_gateway(tmp_path):
                 "name": "patch_text",
                 "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
             },
-            {"name": "run_command", "arguments": {"command": "python -m unittest -q"}},
+            {
+                "name": "run_command",
+                "arguments": {
+                    "program": "python",
+                    "args": ["-m", "unittest", "-q"],
+                },
+            },
         ],
     )
     gateway = RuntimeGateway.from_home(tmp_path / "project")
@@ -139,7 +145,13 @@ def test_mcp_plan_adapter_resumes_after_approval(tmp_path):
                 "name": "patch_text",
                 "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
             },
-            {"name": "run_command", "arguments": {"command": "python -m unittest -q"}},
+            {
+                "name": "run_command",
+                "arguments": {
+                    "program": "python",
+                    "args": ["-m", "unittest", "-q"],
+                },
+            },
         ],
     )
     gateway = RuntimeGateway.from_home(tmp_path / "project")

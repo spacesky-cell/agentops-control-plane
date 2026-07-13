@@ -3,13 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
 
 from .audit import AuditStore
 from .config import PolicyConfig
 from .models import Decision, ToolRequest, ToolResult, ToolStatus
 from .policy import PolicyEngine
-from .redaction import redact_durable
 from .tools import ToolExecutor
 from .workspace import WorkspaceManager
 
@@ -105,7 +103,7 @@ class RuntimeGateway:
             run_id,
             "policy_decision",
             decision.reason,
-            {"args": self._redact_args(request.args)},
+            {"args": request.args},
             request.tool_name,
             decision.decision.value,
             decision.risk.value,
@@ -185,7 +183,7 @@ class RuntimeGateway:
                 run_id,
                 "tool_failed",
                 str(exc),
-                {"args": self._redact_args(request.args)},
+                {"args": request.args},
                 request.tool_name,
                 decision.decision.value,
                 decision.risk.value,
@@ -196,8 +194,8 @@ class RuntimeGateway:
             "tool_executed",
             f"Tool {request.tool_name} executed.",
             {
-                "args": self._redact_args(request.args),
-                "output": self._redact_output(request.tool_name, output),
+                "args": request.args,
+                "output": output,
             },
             request.tool_name,
             decision.decision.value,
@@ -223,9 +221,6 @@ class RuntimeGateway:
             )
         return authoritative
 
-    def _redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
-        return redact_durable(args)
-
     def request_fingerprint(self, request: ToolRequest) -> str:
         payload = {
             "tool_name": request.tool_name,
@@ -233,6 +228,3 @@ class RuntimeGateway:
         }
         encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-    def _redact_output(self, tool_name: str, output: Any) -> Any:
-        return redact_durable({"output": output})["output"]

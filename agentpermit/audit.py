@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import new_id, utc_now
-from .redaction import redact_durable, redact_text
+from .redaction import redact_durable, redact_text, redact_tool_payload
 
 
 SCHEMA_VERSION = 2
@@ -416,7 +416,10 @@ class AuditStore:
                     decision,
                     risk,
                     redact_text(message),
-                    json.dumps(redact_durable(payload or {}), ensure_ascii=False),
+                    json.dumps(
+                        redact_tool_payload(tool_name, payload or {}),
+                        ensure_ascii=False,
+                    ),
                 ),
             )
             return int(cursor.lastrowid)
@@ -484,7 +487,10 @@ class AuditStore:
                         utc_now(),
                         request_fingerprint,
                         redact_text(policy_reason),
-                        json.dumps(redact_durable(payload), ensure_ascii=False),
+                        json.dumps(
+                            redact_tool_payload(tool_name, payload),
+                            ensure_ascii=False,
+                        ),
                     ),
                 )
                 approval_id = int(cursor.lastrowid)
