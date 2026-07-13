@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import PolicyConfig
+from .config import PolicyConfig, is_protected_path
 from .models import Decision, PolicyDecision, Risk, ToolRequest
 
 
@@ -31,7 +31,7 @@ class PolicyEngine:
         relative = str(request.args.get("path", ""))
         if not relative:
             return PolicyDecision(Decision.DENY, Risk.MEDIUM, "Missing file path.")
-        if self._is_protected(relative):
+        if self._is_protected(relative, workspace_root):
             return PolicyDecision(Decision.DENY, Risk.HIGH, "Protected files cannot be read.")
         if not self._is_inside_workspace(relative, workspace_root):
             return PolicyDecision(Decision.DENY, Risk.HIGH, "Path escapes the workspace.")
@@ -41,7 +41,7 @@ class PolicyEngine:
         relative = str(request.args.get("path", ""))
         if not relative:
             return PolicyDecision(Decision.DENY, Risk.MEDIUM, "Missing file path.")
-        if self._is_protected(relative):
+        if self._is_protected(relative, workspace_root):
             return PolicyDecision(Decision.DENY, Risk.CRITICAL, "Protected files cannot be written.")
         if not self._is_inside_workspace(relative, workspace_root):
             return PolicyDecision(Decision.DENY, Risk.CRITICAL, "Path escapes the workspace.")
@@ -57,7 +57,7 @@ class PolicyEngine:
         relative = str(request.args.get("path", ""))
         if not relative:
             return PolicyDecision(Decision.DENY, Risk.MEDIUM, "Missing file path.")
-        if self._is_protected(relative):
+        if self._is_protected(relative, workspace_root):
             return PolicyDecision(Decision.DENY, Risk.CRITICAL, "Protected files cannot be patched.")
         if not self._is_inside_workspace(relative, workspace_root):
             return PolicyDecision(Decision.DENY, Risk.CRITICAL, "Path escapes the workspace.")
@@ -110,11 +110,14 @@ class PolicyEngine:
             return False
         return True
 
-    def _is_protected(self, relative: str) -> bool:
-        path = Path(relative)
-        normalized = relative.replace("\\", "/")
-        for pattern in self.config.protected_globs:
-            if path.match(pattern) or Path(normalized).match(pattern):
-                return True
-        return False
+    def _is_protected(self, relative: str, workspace_root: Path) -> bool:
+        if is_protected_path(relative, self.config.protected_globs):
+            return True
+        root = workspace_root.resolve()
+        candidate = (root / relative).resolve()
+        try:
+            resolved_relative = candidate.relative_to(root)
+        except ValueError:
+            return False
+        return is_protected_path(resolved_relative, self.config.protected_globs)
 

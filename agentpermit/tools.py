@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import PolicyConfig
-from .workspace import DEFAULT_EXCLUDES, WorkspaceManager
+from .workspace import WorkspaceManager
 
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
@@ -105,25 +105,13 @@ class ToolExecutor:
         raise ValueError(f"Unknown tool: {tool_name}")
 
     def list_files(self, workspace: Path, pattern: str | None = None) -> list[str]:
-        glob_pattern = pattern or "**/*"
-        files: list[str] = []
-        for path in workspace.glob(glob_pattern):
-            if path.is_dir():
-                continue
-            if any(part in DEFAULT_EXCLUDES for part in path.relative_to(workspace).parts):
-                continue
-            files.append(path.relative_to(workspace).as_posix())
-        return sorted(files)
+        return self.workspace_manager.list_files(workspace, pattern)
 
     def read_file(self, workspace: Path, relative: str) -> str:
-        path = self.workspace_manager.safe_path(workspace, relative)
-        return path.read_text(encoding="utf-8")
+        return self.workspace_manager.read_text(workspace, relative)
 
     def write_file(self, workspace: Path, relative: str, content: str) -> dict[str, Any]:
-        path = self.workspace_manager.safe_path(workspace, relative)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        before = path.read_text(encoding="utf-8") if path.exists() else None
-        path.write_text(content, encoding="utf-8")
+        before = self.workspace_manager.write_text(workspace, relative, content)
         return {
             "path": relative,
             "created": before is None,
@@ -132,12 +120,9 @@ class ToolExecutor:
         }
 
     def patch_text(self, workspace: Path, relative: str, old: str, new: str) -> dict[str, Any]:
-        path = self.workspace_manager.safe_path(workspace, relative)
-        text = path.read_text(encoding="utf-8")
-        if old not in text:
-            raise ValueError(f"Patch target text not found in {relative}")
-        updated = text.replace(old, new, 1)
-        path.write_text(updated, encoding="utf-8")
+        text, updated = self.workspace_manager.patch_text(
+            workspace, relative, old, new
+        )
         return {
             "path": relative,
             "before_chars": len(text),

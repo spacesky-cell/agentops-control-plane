@@ -7,6 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from .gateway import RuntimeGateway
 from .models import ToolRequest, ToolStatus
+from .redaction import redact_durable
 
 
 @runtime_checkable
@@ -61,7 +62,7 @@ class ScriptedAgent(AgentAdapter):
                 run_id,
                 "agent_step",
                 f"Agent step {index}: {request.tool_name}",
-                {"step": step},
+                redact_durable({"step": step}),
                 request.tool_name,
             )
             result = gateway.execute_tool(run_id, workspace, request, auto_approve=auto_approve)
@@ -100,7 +101,7 @@ class ScriptedAgent(AgentAdapter):
         if not approved:
             raise ValueError("No approved pending action found for this run.")
 
-        workspace = Path(run["workspace_path"])
+        workspace = gateway.resume_workspace(run_id)
         executed_count = sum(
             1 for event in gateway.audit_store.get_events(run_id) if event["type"] == "tool_executed"
         )
@@ -128,7 +129,7 @@ class ScriptedAgent(AgentAdapter):
             )
             if result.status == ToolStatus.PENDING_APPROVAL:
                 if preapproved_by:
-                    raise ValueError(result.error or "No approved pending action found for this request.")
+                    raise ValueError("No approved pending action found for this request.")
                 status = "waiting_for_approval"
                 break
             if not result.ok:

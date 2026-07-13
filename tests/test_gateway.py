@@ -1,6 +1,10 @@
+import hashlib
 import json
+import os
 import zipfile
 from pathlib import Path
+
+import pytest
 
 from agentpermit.agents import ScriptedAgent
 from agentpermit.audit import ApprovalNotFoundError
@@ -240,7 +244,116 @@ def test_snapshots_include_workspace_files(tmp_path):
 def test_audit_store_records_schema_version(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
 
-    assert gateway.audit_store.get_schema_version() == 1
+    assert gateway.audit_store.get_schema_version() == 2
+
+
+def test_started_run_persists_authoritative_workspace_identity(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+
+    run_id, workspace = gateway.start_run("identity run", "test-agent")
+    run = gateway.audit_store.get_run(run_id)
+
+    assert run["workspace_path"] == str(workspace)
+    assert json.loads(run["workspace_identity"]) == list(
+        gateway.workspace_manager.workspace_identity(workspace)
+    )
+
+
+def test_fresh_gateway_rejects_replaced_workspace_root(tmp_path):
+    home = tmp_path / "project"
+    gateway = RuntimeGateway.from_home(home)
+    run_id, workspace = gateway.start_run("fresh identity", "test-agent")
+    (workspace / "safe.txt").write_text("ordinary", encoding="utf-8")
+    original = workspace.with_name(f"{workspace.name}-original")
+    replacement = workspace.with_name(f"{workspace.name}-replacement")
+    replacement.mkdir()
+    (replacement / "safe.txt").write_text("replacement-secret", encoding="utf-8")
+    os.replace(workspace, original)
+    os.replace(replacement, workspace)
+    fresh = RuntimeGateway.from_home(home)
+
+    with pytest.raises(ValueError, match="authoritative workspace identity"):
+        fresh.execute_tool(run_id, workspace, ToolRequest("read_file", {"path": "safe.txt"}))
+
+    assert (workspace / "safe.txt").read_text(encoding="utf-8") == "replacement-secret"
+
+
+def test_resume_fails_closed_when_running_row_has_no_workspace_identity(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    workspace = gateway.workspace_manager.create("run_legacy_identity")
+    run_id = gateway.audit_store.start_run("legacy identity", "test-agent", workspace)
+
+    with pytest.raises(ValueError, match="authoritative workspace identity"):
+        gateway.resume_workspace(run_id)
+
+
+def test_start_run_copy_failure_marks_failed_and_removes_partial_workspace(
+    tmp_path, monkeypatch
+):
+    source = make_sample_repo(tmp_path)
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    original_copy = gateway.workspace_manager._copy_source
+
+    def copy_then_fail(source_path, workspace):
+        original_copy(source_path, workspace)
+        raise RuntimeError("injected copy failure")
+
+    monkeypatch.setattr(gateway.workspace_manager, "_copy_source", copy_then_fail)
+
+    with pytest.raises(RuntimeError, match="injected copy failure"):
+        gateway.start_run("copy failure", "test-agent", source)
+
+    run = gateway.audit_store.list_runs()[0]
+    assert run["status"] == "failed"
+    assert run["workspace_path"] != "."
+    assert list(gateway.workspace_manager.workspaces_dir.iterdir()) == []
+
+
+def test_start_run_create_failure_after_root_mkdir_removes_partial_workspace(
+    tmp_path, monkeypatch
+):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    original_stat = gateway.workspace_manager._stat_child
+    target_stats = 0
+
+    def fail_after_root_mkdir(parent, name):
+        nonlocal target_stats
+        if name.startswith("run_"):
+            target_stats += 1
+            if target_stats == 3:
+                raise RuntimeError("injected create failure")
+        return original_stat(parent, name)
+
+    monkeypatch.setattr(gateway.workspace_manager, "_stat_child", fail_after_root_mkdir)
+
+    with pytest.raises(RuntimeError, match="injected create failure"):
+        gateway.start_run("create failure", "test-agent")
+
+    run = gateway.audit_store.list_runs()[0]
+    assert run["status"] == "failed"
+    assert run["workspace_path"] == ""
+    assert list(gateway.workspace_manager.workspaces_dir.iterdir()) == []
+
+
+def test_before_snapshot_failure_marks_failed_and_removes_workspace(
+    tmp_path, monkeypatch
+):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+
+    def fail_snapshot(run_id, workspace, label):
+        raise RuntimeError("injected before snapshot failure")
+
+    monkeypatch.setattr(gateway.workspace_manager, "snapshot", fail_snapshot)
+
+    with pytest.raises(RuntimeError, match="injected before snapshot failure"):
+        gateway.start_run("snapshot failure", "test-agent")
+
+    run = gateway.audit_store.list_runs()[0]
+    assert run["status"] == "failed"
+    assert run["workspace_path"] != "."
+    assert run["workspace_identity"]
+    assert not Path(run["workspace_path"]).exists()
+    assert list(gateway.workspace_manager.workspaces_dir.iterdir()) == []
 
 
 def test_audit_store_persists_run_metadata(tmp_path):
@@ -290,7 +403,7 @@ def test_waiting_for_approval_keeps_run_open(tmp_path):
     assert not any(event["type"] == "run_finished" for event in events)
 
 
-def test_read_file_audit_uses_preview_not_full_content(tmp_path):
+def test_read_file_audit_uses_hash_not_full_content(tmp_path):
     source = tmp_path / "repo"
     source.mkdir()
     content = "x" * 900
@@ -304,9 +417,8 @@ def test_read_file_audit_uses_preview_not_full_content(tmp_path):
 
     assert result.output == content
     assert tool_event["payload"]["output"] == {
-        "content_preview": content[:500],
         "content_chars": len(content),
-        "truncated": True,
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
     }
     assert content not in json.dumps(tool_event["payload"], ensure_ascii=False)
 

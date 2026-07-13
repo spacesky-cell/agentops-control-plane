@@ -9,6 +9,7 @@ from .audit import AuditStore
 from .config import PolicyConfig
 from .models import Decision, ToolRequest, ToolResult, ToolStatus
 from .policy import PolicyEngine
+from .redaction import redact_durable
 from .tools import ToolExecutor
 from .workspace import WorkspaceManager
 
@@ -31,7 +32,7 @@ class RuntimeGateway:
         root = Path(home)
         agentpermit_dir = root / ".agentpermit"
         policy_config = config or PolicyConfig()
-        workspace_manager = WorkspaceManager(agentpermit_dir)
+        workspace_manager = WorkspaceManager(agentpermit_dir, policy_config)
         return cls(
             audit_store=AuditStore(agentpermit_dir / "runs.sqlite"),
             workspace_manager=workspace_manager,
@@ -40,20 +41,39 @@ class RuntimeGateway:
         )
 
     def start_run(self, task: str, agent_name: str, source: str | Path | None = None) -> tuple[str, Path]:
-        provisional_workspace = Path(".")
-        run_id = self.audit_store.start_run(task, agent_name, provisional_workspace)
-        workspace = self.workspace_manager.create(run_id, source)
-        self._update_workspace_path(run_id, workspace)
-        snapshot = self.workspace_manager.snapshot(run_id, workspace, "before")
-        self.audit_store.add_event(
-            run_id,
-            "run_started",
-            "Run started.",
-            {"workspace": str(workspace), "snapshot": str(snapshot)},
-        )
-        return run_id, workspace
+        run_id = self.audit_store.start_run(task, agent_name)
+        workspace: Path | None = None
+        identity: tuple[int, int] | None = None
+        try:
+            workspace = self.workspace_manager.create(run_id, source)
+            identity = self.workspace_manager.workspace_identity(workspace)
+            self.audit_store.activate_run_workspace(run_id, workspace, identity)
+            snapshot = self.workspace_manager.snapshot(run_id, workspace, "before")
+            self.audit_store.add_event(
+                run_id,
+                "run_started",
+                "Run started.",
+                {"workspace": str(workspace), "snapshot": str(snapshot)},
+            )
+            return run_id, workspace
+        except Exception as exc:
+            cleanup_error: str | None = None
+            if workspace is not None and identity is not None:
+                try:
+                    self.workspace_manager.remove_workspace(workspace, identity)
+                except Exception as cleanup_exc:  # noqa: BLE001 - audit cleanup failure.
+                    cleanup_error = str(cleanup_exc)
+            self.audit_store.finish_run(run_id, "failed")
+            self.audit_store.add_event(
+                run_id,
+                "run_start_failed",
+                str(exc),
+                {"cleanup_error": cleanup_error} if cleanup_error else {},
+            )
+            raise
 
     def finish_run(self, run_id: str, workspace: Path, status: str) -> None:
+        workspace = self._verified_workspace(run_id, workspace)
         snapshot = self.workspace_manager.snapshot(run_id, workspace, "after")
         self.audit_store.add_event(
             run_id,
@@ -79,6 +99,7 @@ class RuntimeGateway:
         auto_approve: bool = False,
         preapproved_by: str | None = None,
     ) -> ToolResult:
+        workspace = self._verified_workspace(run_id, workspace)
         decision = self.policy_engine.evaluate(request, workspace)
         self.audit_store.add_event(
             run_id,
@@ -91,76 +112,72 @@ class RuntimeGateway:
         )
         if decision.decision == Decision.DENY:
             return ToolResult(ToolStatus.DENIED, error=decision.reason, decision=decision)
-        if decision.decision == Decision.REQUIRE_APPROVAL and not auto_approve and not preapproved_by:
-            approval_id = self.audit_store.create_approval(
+        if decision.decision == Decision.REQUIRE_APPROVAL:
+            resolution = self.audit_store.resolve_approval(
                 run_id,
                 request.tool_name,
+                self.request_fingerprint(request),
                 {
-                    "args": self._redact_args(request.args),
+                    "args": request.args,
                     "requested_by": request.requested_by,
-                    "request_fingerprint": self.request_fingerprint(request),
                 },
                 decision.reason,
+                auto_approve=auto_approve,
             )
-            self.audit_store.add_event(
-                run_id,
-                "approval_requested",
-                f"Approval required: {decision.reason}",
-                {"approval_id": approval_id},
-                request.tool_name,
-                decision.decision.value,
-                decision.risk.value,
-            )
-            return ToolResult(
-                ToolStatus.PENDING_APPROVAL,
-                error=decision.reason,
-                decision=decision,
-                approval_id=approval_id,
-            )
-        if decision.decision == Decision.REQUIRE_APPROVAL and auto_approve:
-            approval_id = self.audit_store.create_approval(
-                run_id,
-                request.tool_name,
-                {
-                    "args": self._redact_args(request.args),
-                    "requested_by": request.requested_by,
-                    "request_fingerprint": self.request_fingerprint(request),
-                },
-                decision.reason,
-            )
-            self.audit_store.decide_approval(
-                approval_id,
-                "approved",
-                "auto-approve",
-                "Demo auto-approval mode.",
-            )
-            self.audit_store.add_event(
-                run_id,
-                "approval_auto_approved",
-                "Approval auto-approved for demo run.",
-                {"approval_id": approval_id},
-                request.tool_name,
-                "approved",
-                decision.risk.value,
-            )
-        if decision.decision == Decision.REQUIRE_APPROVAL and preapproved_by:
-            approval_id = self._find_approved_approval(run_id, request)
-            if approval_id is None:
+            if resolution.state == "rejected":
+                self.audit_store.add_event(
+                    run_id,
+                    "approval_rejected",
+                    "Matching approval was rejected.",
+                    {"approval_id": resolution.approval_id},
+                    request.tool_name,
+                    "rejected",
+                    decision.risk.value,
+                )
+                return ToolResult(
+                    ToolStatus.DENIED,
+                    error="A matching approval was rejected.",
+                    decision=decision,
+                    approval_id=resolution.approval_id,
+                )
+            if resolution.state == "pending":
+                event_type = "approval_requested" if resolution.created else "approval_pending"
+                self.audit_store.add_event(
+                    run_id,
+                    event_type,
+                    f"Approval required: {decision.reason}",
+                    {"approval_id": resolution.approval_id},
+                    request.tool_name,
+                    decision.decision.value,
+                    decision.risk.value,
+                )
                 return ToolResult(
                     ToolStatus.PENDING_APPROVAL,
-                    error="No approved pending action found for this request.",
+                    error=decision.reason,
                     decision=decision,
+                    approval_id=resolution.approval_id,
                 )
-            self.audit_store.consume_approval(approval_id)
-            self.audit_store.add_event(
-                run_id,
-                "approval_used",
-                f"Pre-approved action executed by {preapproved_by}.",
-                {"approved_by": preapproved_by, "approval_id": approval_id},
-                request.tool_name,
-                "approved",
-                decision.risk.value,
-            )
+            if auto_approve and resolution.approver == "auto-approve":
+                self.audit_store.add_event(
+                    run_id,
+                    "approval_auto_approved",
+                    "Approval auto-approved by a trusted server adapter.",
+                    {"approval_id": resolution.approval_id},
+                    request.tool_name,
+                    "approved",
+                    decision.risk.value,
+                )
+            else:
+                approved_by = resolution.approver or preapproved_by or "reviewer"
+                self.audit_store.add_event(
+                    run_id,
+                    "approval_used",
+                    f"Approved action executed by {approved_by}.",
+                    {"approved_by": approved_by, "approval_id": resolution.approval_id},
+                    request.tool_name,
+                    "approved",
+                    decision.risk.value,
+                )
         try:
             output = self.tool_executor.execute(workspace, request.tool_name, request.args)
         except Exception as exc:  # noqa: BLE001 - audit boundary should capture tool exceptions.
@@ -188,25 +205,26 @@ class RuntimeGateway:
         )
         return ToolResult(ToolStatus.OK, output=output, decision=decision)
 
-    def _update_workspace_path(self, run_id: str, workspace: Path) -> None:
-        with self.audit_store._connect() as conn:
-            conn.execute(
-                "UPDATE runs SET workspace_path = ? WHERE id = ?",
-                (str(workspace), run_id),
+    def resume_workspace(self, run_id: str) -> Path:
+        run = self.audit_store.get_run(run_id)
+        if not run:
+            raise ValueError(f"Run not found: {run_id}")
+        identity = self.audit_store.get_run_workspace_identity(run_id)
+        return self.workspace_manager.register_workspace(
+            Path(str(run["workspace_path"])), identity
+        )
+
+    def _verified_workspace(self, run_id: str, workspace: Path) -> Path:
+        authoritative = self.resume_workspace(run_id)
+        supplied = Path(workspace).absolute()
+        if supplied != authoritative:
+            raise ValueError(
+                f"Workspace path does not match authoritative run workspace: {workspace}"
             )
+        return authoritative
 
     def _redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
-        redacted = dict(args)
-        for key in list(redacted):
-            lowered = key.lower()
-            if "token" in lowered or "secret" in lowered or "password" in lowered:
-                redacted[key] = "[redacted]"
-        if "content" in redacted and isinstance(redacted["content"], str):
-            content = redacted["content"]
-            redacted["content_preview"] = content[:500]
-            redacted["content_chars"] = len(content)
-            del redacted["content"]
-        return redacted
+        return redact_durable(args)
 
     def request_fingerprint(self, request: ToolRequest) -> str:
         payload = {
@@ -216,31 +234,5 @@ class RuntimeGateway:
         encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-    def _find_approved_approval(self, run_id: str, request: ToolRequest) -> int | None:
-        fingerprint = self.request_fingerprint(request)
-        for approval in self.audit_store.list_approvals(run_id):
-            if approval["status"] != "approved":
-                continue
-            if approval["tool_name"] != request.tool_name:
-                continue
-            if approval.get("payload", {}).get("request_fingerprint") == fingerprint:
-                return int(approval["id"])
-        return None
-
     def _redact_output(self, tool_name: str, output: Any) -> Any:
-        if tool_name == "read_file" and isinstance(output, str):
-            return self._summarize_text(output)
-        if tool_name == "run_command" and isinstance(output, dict):
-            redacted = dict(output)
-            command_output = redacted.get("output")
-            if isinstance(command_output, str):
-                redacted["output"] = self._summarize_text(command_output)
-            return redacted
-        return output
-
-    def _summarize_text(self, text: str) -> dict[str, Any]:
-        return {
-            "content_preview": text[:500],
-            "content_chars": len(text),
-            "truncated": len(text) > 500,
-        }
+        return redact_durable({"output": output})["output"]

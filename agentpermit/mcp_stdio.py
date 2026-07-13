@@ -168,7 +168,6 @@ class McpStdioSession:
             self.run_id,
             self.workspace,
             request,
-            auto_approve=bool(params.get("auto_approve", False)),
         )
         payload: dict[str, Any] = {
             "status": result.status.value,

@@ -366,7 +366,7 @@ def render_approval_rows(approvals: list[dict[str, object]], return_to: str) -> 
             f"<td>{status_badge(str(approval['status']))}</td>"
             f"<td>{html.escape(approval['tool_name'])}</td>"
             f"<td>{html.escape(approval['requested_at'])}</td>"
-            f"<td>{html.escape(str(approval.get('reason') or ''))}<pre>{payload}</pre>{actions}</td>"
+            f"<td>{html.escape(str(approval.get('policy_reason') or ''))}<pre>{payload}</pre>{actions}</td>"
             "</tr>"
         )
     return "".join(rows)
@@ -521,7 +521,7 @@ def resume_run(store: AuditStore, run_id: str, policy_config: PolicyConfig | Non
 def gateway_from_store(store: AuditStore, policy_config: PolicyConfig | None = None) -> RuntimeGateway:
     agentpermit_dir = store.db_path.parent
     policy = policy_config or PolicyConfig()
-    workspace_manager = WorkspaceManager(agentpermit_dir)
+    workspace_manager = WorkspaceManager(agentpermit_dir, policy)
     return RuntimeGateway(
         audit_store=store,
         workspace_manager=workspace_manager,

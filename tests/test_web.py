@@ -1,5 +1,7 @@
+import os
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 
 from agentpermit.audit import AuditStore
@@ -463,6 +465,61 @@ def test_dashboard_post_resume_uses_served_policy_for_remaining_tools(tmp_path):
     assert run["status"] == "waiting_for_approval"
     assert [approval["status"] for approval in approvals] == ["consumed", "pending"]
     assert approvals[1]["tool_name"] == "run_command"
+
+
+def test_dashboard_fresh_manager_rejects_replaced_workspace_root(tmp_path):
+    source = make_sample_repo(tmp_path)
+    plan = write_mcp_plan(
+        tmp_path / "identity_plan.json",
+        [
+            {
+                "name": "patch_text",
+                "arguments": {
+                    "path": "math_utils.py",
+                    "old": "return a - b",
+                    "new": "return a + b",
+                },
+            }
+        ],
+    )
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    adapter = McpPlanAdapter.from_file(plan)
+    run_id = adapter.run(gateway, "dashboard identity", source=source)
+    approval = gateway.audit_store.list_approvals(run_id)[0]
+    gateway.audit_store.decide_approval(
+        approval["id"], "approved", "dashboard", "reviewed"
+    )
+    run = gateway.audit_store.get_run(run_id)
+    workspace = Path(run["workspace_path"])
+    original = workspace.with_name(f"{workspace.name}-original")
+    replacement = workspace.with_name(f"{workspace.name}-replacement")
+    replacement.mkdir()
+    replacement_file = replacement / "math_utils.py"
+    replacement_file.write_text(
+        "def add(a, b):\n    return a - b\n# replacement-secret\n",
+        encoding="utf-8",
+    )
+    os.replace(workspace, original)
+    os.replace(replacement, workspace)
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), Dashboard(gateway.audit_store).app()
+    )
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    conn = HTTPConnection("127.0.0.1", server.server_port)
+
+    conn.request("POST", f"/runs/{run_id}/resume")
+    response = conn.getresponse()
+    response.read()
+
+    conn.close()
+    thread.join(timeout=5)
+    server.server_close()
+    assert response.status == 409
+    assert gateway.audit_store.get_run(run_id)["status"] == "waiting_for_approval"
+    assert "return a - b" in (workspace / "math_utils.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_safe_return_to_rejects_protocol_relative_paths():

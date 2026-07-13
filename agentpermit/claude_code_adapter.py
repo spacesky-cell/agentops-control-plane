@@ -10,6 +10,7 @@ from typing import Any, Callable
 from .agents import AgentAdapter
 from .gateway import RuntimeGateway
 from .mcp_adapter import McpPlanAdapter, McpToolCall
+from .redaction import redact_durable
 from .tools import list_tool_definitions
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -174,7 +175,7 @@ class ClaudeCodePlanAdapter(AgentAdapter):
             {
                 "plan_name": plan.name,
                 "tool_calls": [
-                    {"name": call.name, "arguments": gateway._redact_args(call.arguments)}
+                    redact_durable({"name": call.name, "arguments": call.arguments})
                     for call in plan.tool_calls
                 ],
             },

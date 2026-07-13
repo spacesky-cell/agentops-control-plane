@@ -42,7 +42,9 @@ def export_html(store: AuditStore, run_id: str, out: str | Path) -> Path:
         )
     approval_items = "".join(
         f"<li>#{item['id']} {html.escape(item['tool_name'])}: "
-        f"{html.escape(item['status'])} ({html.escape(item.get('reason') or '')})</li>"
+        f"{html.escape(item['status'])} "
+        f"(Policy reason: {html.escape(item.get('policy_reason') or '')}; "
+        f"Reviewer reason: {html.escape(item.get('reviewer_reason') or '')})</li>"
         for item in approvals
     )
     document = f"""<!doctype html>

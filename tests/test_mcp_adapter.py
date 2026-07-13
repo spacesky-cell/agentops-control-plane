@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -175,7 +176,8 @@ def test_mcp_tool_call_event_redacts_content_arguments(tmp_path):
     mcp_event = [event for event in events if event["type"] == "mcp_tool_call"][-1]
 
     arguments = mcp_event["payload"]["tool_call"]["arguments"]
-    assert "content" not in arguments
-    assert arguments["content_preview"] == content[:500]
-    assert arguments["content_chars"] == len(content)
+    assert arguments["content"] == {
+        "content_chars": len(content),
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+    }
     assert content not in json.dumps(mcp_event["payload"], ensure_ascii=False)
