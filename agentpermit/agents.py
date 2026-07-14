@@ -101,6 +101,10 @@ class ScriptedAgent(AgentAdapter):
         if not approved:
             raise ValueError("No approved pending action found for this run.")
 
+        if not gateway.resume_run(run_id):
+            current = gateway.audit_store.get_run(run_id)
+            status = current["status"] if current else "missing"
+            raise ValueError(f"Run is not waiting for approval: {status}")
         workspace = gateway.resume_workspace(run_id)
         executed_count = sum(
             1 for event in gateway.audit_store.get_events(run_id) if event["type"] == "tool_executed"

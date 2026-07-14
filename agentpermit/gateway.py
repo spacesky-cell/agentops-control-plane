@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 from pathlib import Path
 
 from .audit import AuditStore
@@ -61,7 +62,12 @@ class RuntimeGateway:
                     self.workspace_manager.remove_workspace(workspace, identity)
                 except Exception as cleanup_exc:  # noqa: BLE001 - audit cleanup failure.
                     cleanup_error = str(cleanup_exc)
-            self.audit_store.finish_run(run_id, "failed")
+            self.audit_store.finish_run(
+                run_id,
+                "failed",
+                message="Run failed while starting.",
+                payload={"error": str(exc)},
+            )
             self.audit_store.add_event(
                 run_id,
                 "run_start_failed",
@@ -70,24 +76,28 @@ class RuntimeGateway:
             )
             raise
 
-    def finish_run(self, run_id: str, workspace: Path, status: str) -> None:
+    def finish_run(self, run_id: str, workspace: Path, status: str) -> bool:
         workspace = self._verified_workspace(run_id, workspace)
-        snapshot = self.workspace_manager.snapshot(run_id, workspace, "after")
-        self.audit_store.add_event(
-            run_id,
-            "run_finished",
-            f"Run finished with status {status}.",
-            {"snapshot": str(snapshot)},
+        snapshot = self.workspace_manager.snapshot(
+            run_id, workspace, f"after-{secrets.token_hex(12)}"
         )
-        self.audit_store.finish_run(run_id, status)
+        changed = self.audit_store.finish_run(
+            run_id, status, payload={"snapshot": str(snapshot)}
+        )
+        if not changed:
+            self.workspace_manager.remove_snapshot(snapshot)
+        return changed
 
-    def pause_run(self, run_id: str, status: str = "waiting_for_approval") -> None:
-        self.audit_store.add_event(
-            run_id,
-            "run_paused",
-            f"Run paused with status {status}.",
-        )
-        self.audit_store.pause_run(run_id, status)
+    def pause_run(
+        self,
+        run_id: str,
+        status: str = "waiting_for_approval",
+        approval_id: int | None = None,
+    ) -> None:
+        self.audit_store.pause_run(run_id, status, approval_id)
+
+    def resume_run(self, run_id: str) -> bool:
+        return self.audit_store.resume_run(run_id)
 
     def execute_tool(
         self,

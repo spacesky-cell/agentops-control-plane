@@ -288,6 +288,20 @@ class WorkspaceManager:
                     )
         return archive
 
+    def remove_snapshot(self, snapshot: str | Path) -> bool:
+        """Remove one snapshot returned by this manager without following aliases."""
+        path = Path(os.path.abspath(snapshot))
+        if path.parent != self._snapshots_state.path:
+            raise ValueError(f"Snapshot path is outside snapshot storage: {path}")
+        name = self._validate_filename_component(path.name)
+        with self._directory_lease(self._snapshots_state) as storage:
+            current = self._stat_child(storage, name)
+            if current is None:
+                return False
+            self._require_snapshot_destination(path, current)
+            identity = self._identity(current)
+            return self._unlink_child_if_identity(storage, name, path, identity)
+
     def safe_path(self, workspace: str | Path, relative: str) -> Path:
         with self._leased_path(workspace, relative) as access:
             return access.path

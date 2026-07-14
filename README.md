@@ -29,9 +29,8 @@ This project is a portfolio-grade MVP for those concerns.
 - SQLite audit log for runs, events, decisions, approvals, and schema version.
 - Workspace snapshots before and after execution.
 - Scripted agent adapter for deterministic demos and tests.
-- Local MCP-style tool-call plan adapter for exercising the same gateway contract.
-- Optional Claude Code plan adapter that asks `claude -p` for a JSON tool plan, then executes it through the same policy, approval, workspace, and audit gateway.
-- JSON-lines stdio transport with MCP-compatible initialization, `tools/list`, and `tools/call` methods.
+- Standard MCP JSON-lines server with `initialize`, `tools/list`, and
+  governed `tools/call` support.
 - HTML/JSON run export.
 - Small local web UI for browsing runs, traces, approvals, and patch diffs.
 - Standard-library implementation; no runtime dependencies.
@@ -58,73 +57,16 @@ python -m agentpermit --home .demo run-script `
   --auto-approve
 ```
 
-Run a local MCP-style tool-call plan through the same governance gateway:
+Start the standard MCP server for a source repository and task:
 
 ```powershell
-python -m agentpermit run-mcp-plan `
-  --plan examples\mcp_tool_plan.json `
+python -m agentpermit mcp `
   --source examples\sample_repo `
-  --auto-approve
+  --task "Inspect the repository"
 ```
 
-MCP-style plans also support the same approval/resume flow:
-
-```powershell
-python -m agentpermit approve <approval_id> --approver reviewer
-python -m agentpermit resume-mcp-plan <run_id> `
-  --plan examples\mcp_tool_plan.json `
-  --approver reviewer
-```
-
-Ask Claude Code to generate a governed tool-call plan, then execute that plan
-through the AgentPermit gateway:
-
-```powershell
-python -m agentpermit run-claude-code-plan `
-  --source examples\sample_repo `
-  --task "Inspect math_utils.py and run the relevant test" `
-  --auto-approve
-```
-
-The Claude Code adapter disables Claude's tools with `--tools=` and asks for a
-JSON plan shaped like:
-
-```json
-{
-  "name": "claude-code-plan",
-  "tool_calls": [
-    {"name": "read_file", "arguments": {"path": "math_utils.py"}}
-  ]
-}
-```
-
-Claude Code does not directly edit files or run shell commands in this mode.
-Every generated tool call is still evaluated by AgentPermit policy, approval
-rules, isolated workspaces, snapshots, and audit logs.
-
-On Windows, Python may need the real Claude Code executable rather than the
-PowerShell wrapper:
-
-```powershell
-python -m agentpermit run-claude-code-plan `
-  --source examples\sample_repo `
-  --task "List files" `
-  --claude-command E:\Java\GlobalNodeModules\node_modules\@anthropic-ai\claude-code\bin\claude.exe
-```
-
-If Claude Code is logged in but the run returns `503 no available accounts` or
-times out, the control plane will record a failed run with the Claude Code error
-in the trace. In that case, fix Claude Code auth/provider availability first
-with `claude auth status`, `claude doctor`, or an interactive Claude Code
-session, then rerun the command.
-
-Serve the thin JSON-lines stdio transport:
-
-```powershell
-python -m agentpermit serve-mcp-stdio
-```
-
-It accepts newline-delimited JSON-RPC requests. Standard MCP-style clients
+Use `--auto-approve` only for a locally trusted server process. The server
+accepts newline-delimited JSON-RPC requests. Standard MCP clients
 should call `initialize`, send `notifications/initialized`, then use
 `tools/list` and `tools/call`. `tools/list` returns the governed tool
 definitions and input schemas. `tools/call` validates arguments against those
@@ -170,8 +112,7 @@ python -m agentpermit serve --port 8765
 The dashboard lists runs, traces, approval requests, and patch diffs. Pending
 approval requests can be approved or rejected from `/approvals` or from an
 individual run detail page; decisions are written back to the same SQLite audit
-store used by the CLI. MCP-style plan runs that are waiting on an approved
-action can also be resumed from the run detail page.
+store used by the CLI.
 
 For UI review, start the dashboard and open `http://127.0.0.1:8765`. The local
 HTML interface is dependency-free and can also be exercised with browser

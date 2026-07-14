@@ -377,19 +377,116 @@ class AuditStore:
             )
         return int(parsed[0]), int(parsed[1])
 
-    def finish_run(self, run_id: str, status: str) -> None:
+    def finish_run(
+        self,
+        run_id: str,
+        status: str,
+        *,
+        message: str | None = None,
+        payload: dict[str, Any] | None = None,
+        decision: str | None = None,
+    ) -> bool:
+        """Atomically claim a non-terminal run and append its sole terminal event."""
+        if status not in {"success", "failed"}:
+            raise ValueError("terminal run status must be 'success' or 'failed'")
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE runs SET status = ?, ended_at = ? WHERE id = ?",
-                (status, utc_now(), run_id),
+            conn.execute("BEGIN IMMEDIATE")
+            changed = self._finish_run_in_transaction(
+                conn,
+                run_id,
+                status,
+                message=message,
+                payload=payload,
+                decision=decision,
             )
+            conn.commit()
+            return changed
 
-    def pause_run(self, run_id: str, status: str = "waiting_for_approval") -> None:
+    def _finish_run_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        run_id: str,
+        status: str,
+        *,
+        ended_at: str | None = None,
+        message: str | None = None,
+        payload: dict[str, Any] | None = None,
+        decision: str | None = None,
+    ) -> bool:
+        ended_at = ended_at or utc_now()
+        cursor = conn.execute(
+            """
+            UPDATE runs
+            SET status = ?, ended_at = ?
+            WHERE id = ? AND status NOT IN ('success', 'failed')
+            """,
+            (status, ended_at, run_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        conn.execute(
+            """
+            INSERT INTO events (
+                run_id, ts, type, tool_name, decision, risk, message, payload_json
+            ) VALUES (?, ?, 'run_finished', NULL, ?, NULL, ?, ?)
+            """,
+            (
+                run_id,
+                ended_at,
+                decision,
+                redact_text(message or f"Run finished with status {status}."),
+                json.dumps(redact_durable(payload or {}), ensure_ascii=False),
+            ),
+        )
+        return True
+
+    def pause_run(
+        self,
+        run_id: str,
+        status: str = "waiting_for_approval",
+        approval_id: int | None = None,
+    ) -> bool:
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE runs SET status = ?, ended_at = NULL WHERE id = ?",
-                (status, run_id),
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE runs
+                SET status = ?, ended_at = NULL
+                WHERE id = ?
+                  AND status = 'running'
+                  AND EXISTS (
+                      SELECT 1 FROM approvals
+                      WHERE approvals.run_id = runs.id
+                        AND approvals.status IN ('pending', 'approved')
+                        AND (? IS NULL OR approvals.id = ?)
+                  )
+                """,
+                (status, run_id, approval_id, approval_id),
             )
+            if cursor.rowcount == 1:
+                conn.execute(
+                    """
+                    INSERT INTO events (
+                        run_id, ts, type, tool_name, decision, risk, message, payload_json
+                    ) VALUES (?, ?, 'run_paused', NULL, NULL, NULL, ?, '{}')
+                    """,
+                    (run_id, utc_now(), f"Run paused with status {status}."),
+                )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def resume_run(self, run_id: str) -> bool:
+        """Atomically transition an approval-paused run back to running."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE runs
+                SET status = 'running', ended_at = NULL
+                WHERE id = ? AND status = 'waiting_for_approval'
+                """,
+                (run_id,),
+            )
+            return cursor.rowcount == 1
 
     def add_event(
         self,
@@ -576,6 +673,8 @@ class AuditStore:
         if status not in {"approved", "rejected"}:
             raise ValueError("status must be 'approved' or 'rejected'")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            decided_at = utc_now()
             cursor = conn.execute(
                 """
                 UPDATE approvals
@@ -584,7 +683,7 @@ class AuditStore:
                 """,
                 (
                     status,
-                    utc_now(),
+                    decided_at,
                     redact_text(approver),
                     redact_text(reason),
                     approval_id,
@@ -597,6 +696,24 @@ class AuditStore:
                 if row:
                     raise ApprovalStateConflictError(
                         f"Approval {approval_id} is not pending: {row['status']}"
+                    )
+            if status == "rejected":
+                approval = conn.execute(
+                    "SELECT run_id FROM approvals WHERE id = ?", (approval_id,)
+                ).fetchone()
+                if approval is not None:
+                    run_id = str(approval["run_id"])
+                    self._finish_run_in_transaction(
+                        conn,
+                        run_id,
+                        "failed",
+                        ended_at=decided_at,
+                        message="Run finished with status failed after approval rejection.",
+                        payload={
+                            "reason": "approval_rejected",
+                            "approval_id": approval_id,
+                        },
+                        decision="rejected",
                     )
         if cursor.rowcount == 0:
             raise ApprovalNotFoundError(f"Approval not found: {approval_id}")
@@ -641,3 +758,14 @@ class AuditStore:
         for approval in approvals:
             approval["payload"] = json.loads(approval.pop("payload_json"))
         return approvals
+
+    def get_approval(self, approval_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM approvals WHERE id = ?", (approval_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        approval = dict(row)
+        approval["payload"] = json.loads(approval.pop("payload_json"))
+        return approval

@@ -7,22 +7,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .audit import ApprovalNotFoundError, ApprovalStateConflictError, AuditStore
-from .config import PolicyConfig
-from .gateway import RuntimeGateway
-from .mcp_adapter import McpPlanAdapter
-from .policy import PolicyEngine
-from .tools import ToolExecutor
-from .workspace import WorkspaceManager
 
 
 class Dashboard:
-    def __init__(self, store: AuditStore, policy_config: PolicyConfig | None = None) -> None:
+    def __init__(self, store: AuditStore) -> None:
         self.store = store
-        self.policy_config = policy_config or PolicyConfig()
 
     def app(self) -> type[BaseHTTPRequestHandler]:
         store = self.store
-        policy_config = self.policy_config
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
@@ -72,17 +64,6 @@ class Dashboard:
                         return
                     self._redirect(safe_return_to(parsed.query))
                     return
-                if len(parts) == 3 and parts[0] == "runs" and parts[2] == "resume":
-                    resume_status = resume_run(store, parts[1], policy_config)
-                    if resume_status == "resumed":
-                        self._redirect(f"/runs/{parts[1]}")
-                    elif resume_status == "not_found":
-                        self.send_response(404)
-                        self.end_headers()
-                    else:
-                        self.send_response(409)
-                        self.end_headers()
-                    return
                 self.send_response(404)
                 self.end_headers()
 
@@ -117,9 +98,8 @@ def serve(
     store: AuditStore,
     host: str,
     port: int,
-    policy_config: PolicyConfig | None = None,
 ) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), Dashboard(store, policy_config).app())
+    server = ThreadingHTTPServer((host, port), Dashboard(store).app())
     server.serve_forever()
     return server
 
@@ -320,7 +300,7 @@ def render_index(store: AuditStore) -> str:
         "<section class='panel'><h2>Recent runs</h2>"
         "<table><thead><tr><th>Run</th><th>Status</th><th>Agent</th>"
         "<th>Started</th><th>Task</th></tr></thead><tbody>"
-        f"{''.join(rows) or empty_row(5, 'No runs yet', 'Start with run-script or run-mcp-plan to create an auditable run.')}"
+        f"{''.join(rows) or empty_row(5, 'No runs yet', 'Start a governed run with the AgentPermit CLI or MCP server.')}"
         "</tbody></table></section>"
     )
     return render_shell("AgentPermit", content)
@@ -413,7 +393,6 @@ def render_run(store: AuditStore, run_id: str) -> str:
         f"{approval_rows or empty_row(6, 'No approvals for this run', 'This run has not triggered a human approval gate.')}"
         "</tbody></table></section>"
     )
-    resume_action = render_resume_action(store, run)
     content = (
         f"<section class='page-header'><p><a href='/'>Back</a></p><h1>{html.escape(run_id)}</h1>"
         "<p>Run trace, approvals, policy decisions, and captured tool payloads.</p></section>"
@@ -422,7 +401,6 @@ def render_run(store: AuditStore, run_id: str) -> str:
         f"<div class='summary-item'><span>Task</span><strong>{html.escape(run['task'])}</strong></div>"
         f"<div class='summary-item'><span>Workspace</span><strong>{html.escape(run['workspace_path'])}</strong></div>"
         "</section>"
-        f"{resume_action}"
         f"{diff_rows}"
         f"{approval_table}"
         "<section class='panel'><h2>Events</h2><table><thead><tr><th>ID</th><th>Type</th><th>Tool</th>"
@@ -431,26 +409,6 @@ def render_run(store: AuditStore, run_id: str) -> str:
         "</tbody></table></section>"
     )
     return render_shell(f"Run {run_id}", content)
-
-
-def render_resume_action(store: AuditStore, run: dict[str, object]) -> str:
-    run_id_raw = str(run["id"])
-    metadata = store.get_run_metadata(run_id_raw)
-    if run["status"] != "waiting_for_approval" or metadata.get("adapter") != "mcp-plan":
-        return ""
-    has_approved_approval = any(
-        approval["status"] == "approved"
-        for approval in store.list_approvals(run_id_raw)
-    )
-    if not has_approved_approval:
-        return ""
-    run_id = html.escape(run_id_raw)
-    return (
-        "<div class='panel'><form method='post' "
-        f"action='/runs/{run_id}/resume'>"
-        "<button type='submit'>Resume</button>"
-        "</form></div>"
-    )
 
 
 def render_patch_diffs(events: list[dict[str, object]]) -> str:
@@ -497,37 +455,6 @@ def safe_return_to(query: str) -> str:
     if requested.startswith("/runs/run_"):
         return requested
     return "/approvals"
-
-
-def resume_run(store: AuditStore, run_id: str, policy_config: PolicyConfig | None = None) -> str:
-    run = store.get_run(run_id)
-    if not run:
-        return "not_found"
-    metadata = store.get_run_metadata(run_id)
-    if metadata.get("adapter") != "mcp-plan":
-        return "not_found"
-    plan_path = str(metadata.get("plan_path") or "")
-    if not plan_path:
-        return "not_found"
-    adapter = McpPlanAdapter.from_file(plan_path)
-    gateway = gateway_from_store(store, policy_config)
-    try:
-        adapter.resume(gateway, run_id, approver="dashboard")
-    except ValueError:
-        return "conflict"
-    return "resumed"
-
-
-def gateway_from_store(store: AuditStore, policy_config: PolicyConfig | None = None) -> RuntimeGateway:
-    agentpermit_dir = store.db_path.parent
-    policy = policy_config or PolicyConfig()
-    workspace_manager = WorkspaceManager(agentpermit_dir, policy)
-    return RuntimeGateway(
-        audit_store=store,
-        workspace_manager=workspace_manager,
-        policy_engine=PolicyEngine(policy),
-        tool_executor=ToolExecutor(workspace_manager, policy),
-    )
 
 
 def default_store(project_root: str | Path) -> AuditStore:

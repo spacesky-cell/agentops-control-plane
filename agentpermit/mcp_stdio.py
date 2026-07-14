@@ -7,7 +7,7 @@ from typing import Any, TextIO
 
 from . import __version__
 from .gateway import RuntimeGateway
-from .models import ToolRequest
+from .models import ToolRequest, ToolStatus
 from .tools import list_tool_definitions
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -23,10 +23,18 @@ class JsonRpcError(Exception):
 @dataclass
 class McpStdioSession:
     gateway: RuntimeGateway
+    source: str | Path | None = None
+    task: str = "MCP stdio run"
+    agent_name: str = "mcp-stdio"
+    auto_approve: bool = False
     run_id: str | None = None
     workspace: Path | None = None
     initialize_requested: bool = False
     initialized: bool = False
+    _finalized: bool = False
+    _pending_request_fingerprint: str | None = None
+    _pending_approval_id: int | None = None
+    _terminal_status: str | None = None
 
     def handle(self, request: Any) -> dict[str, Any] | None:
         request_id = self._response_id(request)
@@ -42,8 +50,6 @@ class McpStdioSession:
                 return None
             elif method == "ping":
                 result = {}
-            elif method == "run.start":
-                result = self._start(params)
             elif method == "tools/list":
                 self._require_initialized()
                 result = self._list_tools()
@@ -56,10 +62,6 @@ class McpStdioSession:
             elif method == "tools/call":
                 self._require_initialized()
                 result = self._call_tool_mcp(params)
-            elif method == "tool.call":
-                result = self._call_tool(params)
-            elif method == "run.finish":
-                result = self._finish(params)
             else:
                 raise JsonRpcError(-32601, f"Method not found: {method}")
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
@@ -70,11 +72,46 @@ class McpStdioSession:
                 "error": {"code": exc.code, "message": exc.message},
             }
         except Exception as exc:  # noqa: BLE001 - transport boundary returns structured errors.
+            self._finish_failed()
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {"code": -32000, "message": str(exc)},
             }
+
+    def close(self, *, transport_failed: bool = False) -> None:
+        """Finalize a transport exactly once, preserving approval waits."""
+        if self._finalized or not self.run_id or self.workspace is None:
+            return
+        run = self.gateway.audit_store.get_run(self.run_id)
+        if not run:
+            self._finalized = True
+            return
+        if run["status"] in {"success", "failed"}:
+            self._finalized = True
+            return
+        if not transport_failed and run["status"] == "waiting_for_approval":
+            approval = self._pending_approval()
+            if approval is not None and str(approval["status"]) == "rejected":
+                self._finish_failed()
+            elif approval is None or str(approval["status"]) not in {"pending", "approved"}:
+                self._finish_failed()
+            self._finalized = True
+            return
+        status = "failed" if transport_failed or self._terminal_status == "failed" else "success"
+        try:
+            self.gateway.finish_run(self.run_id, self.workspace, status)
+        finally:
+            self._finalized = True
+
+    def _ensure_run(self) -> None:
+        if self.run_id is not None:
+            return
+        self.run_id, self.workspace = self.gateway.start_run(
+            self.task,
+            self.agent_name,
+            self.source,
+        )
 
     def _response_id(self, request: Any) -> str | int | None:
         if not isinstance(request, dict):
@@ -134,18 +171,8 @@ class McpStdioSession:
                 "resources": {"listChanged": False},
                 "prompts": {"listChanged": False},
             },
-            "serverInfo": {
-                "name": "agentpermit",
-                "version": __version__,
-            },
+            "serverInfo": {"name": "agentpermit", "version": __version__},
         }
-
-    def _start(self, params: dict[str, Any]) -> dict[str, Any]:
-        task = str(params.get("task", "MCP stdio run"))
-        agent_name = str(params.get("agent_name", "mcp-stdio"))
-        source = params.get("source")
-        self.run_id, self.workspace = self.gateway.start_run(task, agent_name, source)
-        return {"run_id": self.run_id, "status": "running", "workspace": str(self.workspace)}
 
     def _list_tools(self) -> dict[str, Any]:
         return {"tools": list_tool_definitions()}
@@ -157,18 +184,115 @@ class McpStdioSession:
         return {"prompts": []}
 
     def _call_tool(self, params: dict[str, Any]) -> dict[str, Any]:
-        if not self.run_id or self.workspace is None:
-            raise ValueError("run.start must be called before tool.call")
+        self._ensure_run()
+        if self.run_id is None or self.workspace is None:
+            raise ValueError("Unable to start governed MCP run")
         request = ToolRequest(
             tool_name=str(params["name"]),
             args=dict(params.get("arguments", {})),
-            requested_by=str(params.get("requested_by", "mcp-stdio")),
+            requested_by=self.agent_name,
         )
+        run = self.gateway.audit_store.get_run(self.run_id)
+        if self._terminal_status == "failed" or (run is not None and run["status"] == "failed"):
+            return {
+                "status": ToolStatus.FAILED.value,
+                "ok": False,
+                "output": None,
+                "error": "This governed run has failed; further tool calls are disabled.",
+            }
+
+        request_fingerprint = self.gateway.request_fingerprint(request)
+        if self._pending_approval_id is not None:
+            approval = self._pending_approval()
+            if request_fingerprint != self._pending_request_fingerprint:
+                if approval is not None and str(approval["status"]) == "rejected":
+                    self._finish_failed()
+                    return {
+                        "status": ToolStatus.DENIED.value,
+                        "ok": False,
+                        "output": None,
+                        "error": "The pending approval was rejected.",
+                        "approval_id": self._pending_approval_id,
+                    }
+                return {
+                    "status": ToolStatus.PENDING_APPROVAL.value,
+                    "ok": False,
+                    "output": None,
+                    "error": "Session is waiting for approval of the original tool request.",
+                    "approval_id": self._pending_approval_id,
+                }
+            if (
+                approval is None
+                or approval["run_id"] != self.run_id
+                or approval["request_fingerprint"] != self._pending_request_fingerprint
+            ):
+                self._finish_failed()
+                return {
+                    "status": ToolStatus.FAILED.value,
+                    "ok": False,
+                    "output": None,
+                    "error": "The pending approval is unavailable.",
+                }
+            approval_status = str(approval["status"])
+            if approval_status == "pending":
+                return {
+                    "status": ToolStatus.PENDING_APPROVAL.value,
+                    "ok": False,
+                    "output": None,
+                    "error": "Session is waiting for approval of the original tool request.",
+                    "approval_id": self._pending_approval_id,
+                }
+            if approval_status == "rejected":
+                self._finish_failed()
+                return {
+                    "status": ToolStatus.DENIED.value,
+                    "ok": False,
+                    "output": None,
+                    "error": "The pending approval was rejected.",
+                    "approval_id": self._pending_approval_id,
+                }
+            if approval_status != "approved":
+                self._finish_failed()
+                return {
+                    "status": ToolStatus.FAILED.value,
+                    "ok": False,
+                    "output": None,
+                    "error": f"The pending approval is no longer actionable: {approval_status}.",
+                    "approval_id": self._pending_approval_id,
+                }
+            if not self.gateway.resume_run(self.run_id):
+                # A terminalizer may win after the approval read. Do not execute
+                # the retried request or resurrect the run in that case.
+                self._terminal_status = "failed"
+                self._pending_request_fingerprint = None
+                self._pending_approval_id = None
+                return {
+                    "status": ToolStatus.FAILED.value,
+                    "ok": False,
+                    "output": None,
+                    "error": "The governed run is no longer waiting for approval; retry was not executed.",
+                }
+
         result = self.gateway.execute_tool(
             self.run_id,
             self.workspace,
             request,
+            auto_approve=self.auto_approve,
         )
+        if result.status == ToolStatus.PENDING_APPROVAL:
+            if self._pending_approval_id is None:
+                self._pending_request_fingerprint = request_fingerprint
+                self._pending_approval_id = result.approval_id
+                self.gateway.pause_run(
+                    self.run_id,
+                    "waiting_for_approval",
+                    approval_id=result.approval_id,
+                )
+        else:
+            self._pending_request_fingerprint = None
+            self._pending_approval_id = None
+        if result.status in {ToolStatus.DENIED, ToolStatus.FAILED}:
+            self._finish_failed()
         payload: dict[str, Any] = {
             "status": result.status.value,
             "ok": result.ok,
@@ -179,6 +303,38 @@ class McpStdioSession:
         if result.approval_id is not None:
             payload["approval_id"] = result.approval_id
         return payload
+
+    def _pending_approval(self) -> dict[str, Any] | None:
+        """Read the pending approval through the public audit store API."""
+        if self.run_id is None:
+            return None
+        if self._pending_approval_id is not None:
+            return self.gateway.audit_store.get_approval(self._pending_approval_id)
+        approvals = self.gateway.audit_store.list_approvals(self.run_id)
+        for approval in reversed(approvals):
+            if str(approval["status"]) in {"pending", "approved", "rejected"}:
+                self._pending_approval_id = int(approval["id"])
+                self._pending_request_fingerprint = str(approval["request_fingerprint"])
+                return approval
+        return None
+
+    def _finish_failed(self) -> None:
+        """Persist a terminal failure once, before returning a failed tool result."""
+        self._terminal_status = "failed"
+        if self.run_id is None or self.workspace is None:
+            return
+        run = self.gateway.audit_store.get_run(self.run_id)
+        if run is None or str(run["status"]) in {"success", "failed"}:
+            return
+        try:
+            self.gateway.finish_run(self.run_id, self.workspace, "failed")
+        except Exception as exc:  # noqa: BLE001 - terminal persistence must survive snapshot failures.
+            self.gateway.audit_store.finish_run(
+                self.run_id,
+                "failed",
+                message="Run failed after an unexpected governed tool error.",
+                payload={"snapshot_error": str(exc)},
+            )
 
     def _call_tool_mcp(self, params: dict[str, Any]) -> dict[str, Any]:
         name = params.get("name")
@@ -233,10 +389,7 @@ class McpStdioSession:
                 if item_type == "string":
                     for index, item in enumerate(value):
                         if not isinstance(item, str):
-                            return (
-                                "Invalid tools/call arguments: "
-                                f"{field}[{index}] must be a string."
-                            )
+                            return f"Invalid tools/call arguments: {field}[{index}] must be a string."
         return None
 
     def _stringify_tool_output(self, output: Any) -> str:
@@ -244,26 +397,42 @@ class McpStdioSession:
             return output
         return json.dumps(output, ensure_ascii=False, indent=2)
 
-    def _finish(self, params: dict[str, Any]) -> dict[str, Any]:
-        if not self.run_id or self.workspace is None:
-            raise ValueError("run.start must be called before run.finish")
-        status = str(params.get("status", "success"))
-        self.gateway.finish_run(self.run_id, self.workspace, status)
-        return {"run_id": self.run_id, "status": status}
 
-
-def serve_json_lines(gateway: RuntimeGateway, input_stream: TextIO, output_stream: TextIO) -> None:
-    session = McpStdioSession(gateway)
-    for line in input_stream:
-        if not line.strip():
-            continue
+def serve_json_lines(
+    gateway: RuntimeGateway,
+    input_stream: TextIO,
+    output_stream: TextIO,
+    *,
+    source: str | Path | None = None,
+    task: str = "MCP stdio run",
+    agent_name: str = "mcp-stdio",
+    auto_approve: bool = False,
+) -> None:
+    session = McpStdioSession(
+        gateway,
+        source=source,
+        task=task,
+        agent_name=agent_name,
+        auto_approve=auto_approve,
+    )
+    try:
+        for line in input_stream:
+            if not line.strip():
+                continue
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError:
+                response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error."}}
+            else:
+                response = session.handle(request)
+            if response is None:
+                continue
+            output_stream.write(json.dumps(response, ensure_ascii=False) + "\n")
+            output_stream.flush()
+    except Exception:
         try:
-            request = json.loads(line)
-        except json.JSONDecodeError:
-            response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error."}}
-        else:
-            response = session.handle(request)
-        if response is None:
-            continue
-        output_stream.write(json.dumps(response, ensure_ascii=False) + "\n")
-        output_stream.flush()
+            session.close(transport_failed=True)
+        finally:
+            raise
+    else:
+        session.close()

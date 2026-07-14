@@ -48,18 +48,9 @@ def make_directory_alias(link: Path, target: Path) -> None:
 def test_mcp_client_cannot_enable_auto_approval(tmp_path):
     source = make_source(tmp_path)
     gateway = RuntimeGateway.from_home(tmp_path / "project")
-    session = McpStdioSession(gateway)
+    session = McpStdioSession(gateway, source=source, task="write", agent_name="untrusted-mcp")
     session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
     session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
-    start = session.handle(
-        {
-            "jsonrpc": "2.0",
-            "id": "start",
-            "method": "run.start",
-            "params": {"task": "write", "agent_name": "untrusted-mcp", "source": str(source)},
-        }
-    )
-
     response = session.handle(
         {
             "jsonrpc": "2.0",
@@ -73,7 +64,8 @@ def test_mcp_client_cannot_enable_auto_approval(tmp_path):
         }
     )
 
-    run_id = start["result"]["run_id"]
+    run_id = session.run_id
+    assert run_id is not None
     workspace = Path(gateway.audit_store.get_run(run_id)["workspace_path"])
     assert response["result"]["isError"] is True
     assert "pending_approval" in response["result"]["content"][0]["text"]
@@ -143,6 +135,72 @@ def test_rejected_matching_approval_is_terminal(tmp_path):
     assert result.approval_id == pending.approval_id
     assert not (workspace / "created.txt").exists()
     assert len(gateway.audit_store.list_approvals(run_id)) == 1
+
+
+def test_rejection_before_pause_keeps_run_failed(tmp_path):
+    store = AuditStore(tmp_path / "audit.db")
+    run_id = store.start_run("reject before pause", "test-agent", tmp_path / "workspace")
+    approval_id = store.create_approval(
+        run_id,
+        "write_file",
+        {"args": {"path": "created.txt", "content": "denied"}},
+        "Approval required.",
+    )
+
+    store.decide_approval(approval_id, "rejected", "reviewer", "unsafe")
+    store.pause_run(run_id)
+
+    approval = store.get_approval(approval_id)
+    run = store.get_run(run_id)
+    finished = [event for event in store.get_events(run_id) if event["type"] == "run_finished"]
+    assert approval and approval["status"] == "rejected"
+    assert run and run["status"] == "failed"
+    assert run["ended_at"] is not None
+    assert len(finished) == 1
+
+
+def test_rejection_after_pause_finishes_run_once(tmp_path):
+    store = AuditStore(tmp_path / "audit.db")
+    run_id = store.start_run("reject after pause", "test-agent", tmp_path / "workspace")
+    approval_id = store.create_approval(
+        run_id,
+        "write_file",
+        {"args": {"path": "created.txt", "content": "denied"}},
+        "Approval required.",
+    )
+
+    store.pause_run(run_id)
+    store.decide_approval(approval_id, "rejected", "reviewer", "unsafe")
+
+    approval = store.get_approval(approval_id)
+    run = store.get_run(run_id)
+    finished = [event for event in store.get_events(run_id) if event["type"] == "run_finished"]
+    assert approval and approval["status"] == "rejected"
+    assert run and run["status"] == "failed"
+    assert run["ended_at"] is not None
+    assert len(finished) == 1
+
+
+def test_approval_before_pause_keeps_run_waiting_with_pause_event(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    run_id, _workspace = gateway.start_run("approve before pause", "test-agent")
+    approval_id = gateway.audit_store.create_approval(
+        run_id,
+        "write_file",
+        {"args": {"path": "created.txt", "content": "approved"}},
+        "Approval required.",
+    )
+
+    gateway.audit_store.decide_approval(approval_id, "approved", "reviewer", "safe")
+    gateway.pause_run(run_id)
+
+    run = gateway.audit_store.get_run(run_id)
+    assert run and run["status"] == "waiting_for_approval"
+    assert len([
+        event
+        for event in gateway.audit_store.get_events(run_id)
+        if event["type"] == "run_paused"
+    ]) == 1
 
 
 def test_auto_approval_is_audited_and_consumed_before_execution(tmp_path):

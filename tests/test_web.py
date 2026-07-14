@@ -1,13 +1,8 @@
-import os
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
-from pathlib import Path
 from threading import Thread
 
 from agentpermit.audit import AuditStore
-from agentpermit.config import PolicyConfig
-from agentpermit.gateway import RuntimeGateway
-from agentpermit.mcp_adapter import McpPlanAdapter
 from agentpermit.web import Dashboard, render_approvals, render_index, render_run, safe_return_to
 
 
@@ -34,13 +29,6 @@ def make_sample_repo(root):
     return source
 
 
-def write_mcp_plan(path, calls):
-    import json
-
-    path.write_text(json.dumps({"name": "web-mcp-agent", "tool_calls": calls}), encoding="utf-8")
-    return path
-
-
 def test_index_links_to_approvals(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
 
@@ -54,8 +42,8 @@ def test_index_renders_operational_summary_cards(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     running_id = store.start_run("active task", "agent", tmp_path / "workspace")
     pending_id = store.start_run("approval task", "agent", tmp_path / "pending")
-    store.pause_run(pending_id)
     store.create_approval(pending_id, "patch_text", {"args": {"path": "math_utils.py"}}, "Patch approval.")
+    store.pause_run(pending_id)
     store.finish_run(running_id, "success")
 
     html = render_index(store)
@@ -74,7 +62,7 @@ def test_index_empty_state_is_actionable(tmp_path):
     html = render_index(store)
 
     assert "No runs yet" in html
-    assert "Start with run-script or run-mcp-plan" in html
+    assert "Start a governed run with the AgentPermit CLI or MCP server." in html
 
 
 def test_approvals_page_lists_pending_requests(tmp_path):
@@ -154,40 +142,20 @@ def test_run_page_lists_approvals_for_that_run(tmp_path):
 def test_run_page_renders_summary_and_status_badges(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
+    store.create_approval(
+        run_id,
+        "patch_text",
+        {"args": {"path": "math_utils.py"}},
+        "Patch approval.",
+    )
     store.pause_run(run_id)
 
     html = render_run(store, run_id)
 
     assert "class='run-summary'" in html
     assert "class='status-badge status-waiting-for-approval'" in html
-    assert "No approvals for this run" in html
-
-
-def test_run_page_shows_resume_for_waiting_mcp_plan(tmp_path):
-    store = AuditStore(tmp_path / "runs.sqlite")
-    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
-    store.pause_run(run_id)
-    store.set_run_metadata(run_id, {"adapter": "mcp-plan", "plan_path": str(tmp_path / "plan.json")})
-    approval_id = store.create_approval(run_id, "patch_text", {"args": {"path": "math_utils.py"}}, "Patch approval.")
-    store.decide_approval(approval_id, "approved", "reviewer")
-
-    html = render_run(store, run_id)
-
-    assert f"action='/runs/{run_id}/resume'" in html
-    assert "Resume" in html
-
-
-def test_run_page_hides_resume_until_approval_is_approved(tmp_path):
-    store = AuditStore(tmp_path / "runs.sqlite")
-    run_id = store.start_run("review patch", "agent", tmp_path / "workspace")
-    store.pause_run(run_id)
-    store.set_run_metadata(run_id, {"adapter": "mcp-plan", "plan_path": str(tmp_path / "plan.json")})
-    store.create_approval(run_id, "patch_text", {"args": {"path": "math_utils.py"}}, "Patch approval.")
-
-    html = render_run(store, run_id)
-
-    assert f"action='/runs/{run_id}/resume'" not in html
-    assert "Resume" not in html
+    assert "class='status-badge status-pending'" in html
+    assert "Patch approval." in html
 
 
 def test_dashboard_routes_approvals_page(tmp_path):
@@ -358,180 +326,6 @@ def test_dashboard_post_ignores_external_return_to(tmp_path):
     server.server_close()
     assert response.status == 303
     assert response.getheader("Location") == "/approvals"
-
-
-def test_dashboard_post_resumes_approved_mcp_plan(tmp_path):
-    source = make_sample_repo(tmp_path)
-    plan = write_mcp_plan(
-        tmp_path / "mcp_plan.json",
-        [
-            {"name": "read_file", "arguments": {"path": "math_utils.py"}},
-            {
-                "name": "patch_text",
-                "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
-            },
-            {
-                "name": "run_command",
-                "arguments": {
-                    "program": "python",
-                    "args": ["-m", "unittest", "-q"],
-                },
-            },
-        ],
-    )
-    gateway = RuntimeGateway.from_home(tmp_path / "project")
-    adapter = McpPlanAdapter.from_file(plan)
-    run_id = adapter.run(gateway, "web resume mcp plan", source=source, auto_approve=False)
-    approval = gateway.audit_store.list_approvals(run_id)[0]
-    gateway.audit_store.decide_approval(approval["id"], "approved", "dashboard", "approved from test")
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(gateway.audit_store).app())
-    thread = Thread(target=server.handle_request)
-    thread.start()
-    conn = HTTPConnection("127.0.0.1", server.server_port)
-
-    conn.request("POST", f"/runs/{run_id}/resume")
-    response = conn.getresponse()
-    response.read()
-
-    conn.close()
-    thread.join(timeout=5)
-    server.server_close()
-    run = gateway.audit_store.get_run(run_id)
-    approvals = gateway.audit_store.list_approvals(run_id)
-    assert response.status == 303
-    assert response.getheader("Location") == f"/runs/{run_id}"
-    assert run["status"] == "success"
-    assert approvals[0]["status"] == "consumed"
-
-
-def test_dashboard_post_resume_without_approval_returns_conflict(tmp_path):
-    source = make_sample_repo(tmp_path)
-    plan = write_mcp_plan(
-        tmp_path / "mcp_plan.json",
-        [
-            {
-                "name": "patch_text",
-                "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
-            }
-        ],
-    )
-    gateway = RuntimeGateway.from_home(tmp_path / "project")
-    adapter = McpPlanAdapter.from_file(plan)
-    run_id = adapter.run(gateway, "web resume mcp plan", source=source, auto_approve=False)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(gateway.audit_store).app())
-    thread = Thread(target=server.handle_request)
-    thread.start()
-    conn = HTTPConnection("127.0.0.1", server.server_port)
-
-    conn.request("POST", f"/runs/{run_id}/resume")
-    response = conn.getresponse()
-    response.read()
-
-    conn.close()
-    thread.join(timeout=5)
-    server.server_close()
-    run = gateway.audit_store.get_run(run_id)
-    assert response.status == 409
-    assert run["status"] == "waiting_for_approval"
-
-
-def test_dashboard_post_resume_uses_served_policy_for_remaining_tools(tmp_path):
-    source = make_sample_repo(tmp_path)
-    plan = write_mcp_plan(
-        tmp_path / "mcp_plan.json",
-        [
-            {
-                "name": "patch_text",
-                "arguments": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
-            },
-            {
-                "name": "run_command",
-                "arguments": {
-                    "program": "python",
-                    "args": ["-m", "unittest", "-q"],
-                },
-            },
-        ],
-    )
-    policy = PolicyConfig(command_allow_prefixes=[])
-    gateway = RuntimeGateway.from_home(tmp_path / "project", policy)
-    adapter = McpPlanAdapter.from_file(plan)
-    run_id = adapter.run(gateway, "web resume mcp plan", source=source, auto_approve=False)
-    approval = gateway.audit_store.list_approvals(run_id)[0]
-    gateway.audit_store.decide_approval(approval["id"], "approved", "dashboard", "approved from test")
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(gateway.audit_store, policy).app())
-    thread = Thread(target=server.handle_request)
-    thread.start()
-    conn = HTTPConnection("127.0.0.1", server.server_port)
-
-    conn.request("POST", f"/runs/{run_id}/resume")
-    response = conn.getresponse()
-    response.read()
-
-    conn.close()
-    thread.join(timeout=5)
-    server.server_close()
-    run = gateway.audit_store.get_run(run_id)
-    approvals = gateway.audit_store.list_approvals(run_id)
-    assert response.status == 303
-    assert run["status"] == "waiting_for_approval"
-    assert [approval["status"] for approval in approvals] == ["consumed", "pending"]
-    assert approvals[1]["tool_name"] == "run_command"
-
-
-def test_dashboard_fresh_manager_rejects_replaced_workspace_root(tmp_path):
-    source = make_sample_repo(tmp_path)
-    plan = write_mcp_plan(
-        tmp_path / "identity_plan.json",
-        [
-            {
-                "name": "patch_text",
-                "arguments": {
-                    "path": "math_utils.py",
-                    "old": "return a - b",
-                    "new": "return a + b",
-                },
-            }
-        ],
-    )
-    gateway = RuntimeGateway.from_home(tmp_path / "project")
-    adapter = McpPlanAdapter.from_file(plan)
-    run_id = adapter.run(gateway, "dashboard identity", source=source)
-    approval = gateway.audit_store.list_approvals(run_id)[0]
-    gateway.audit_store.decide_approval(
-        approval["id"], "approved", "dashboard", "reviewed"
-    )
-    run = gateway.audit_store.get_run(run_id)
-    workspace = Path(run["workspace_path"])
-    original = workspace.with_name(f"{workspace.name}-original")
-    replacement = workspace.with_name(f"{workspace.name}-replacement")
-    replacement.mkdir()
-    replacement_file = replacement / "math_utils.py"
-    replacement_file.write_text(
-        "def add(a, b):\n    return a - b\n# replacement-secret\n",
-        encoding="utf-8",
-    )
-    os.replace(workspace, original)
-    os.replace(replacement, workspace)
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", 0), Dashboard(gateway.audit_store).app()
-    )
-    thread = Thread(target=server.handle_request)
-    thread.start()
-    conn = HTTPConnection("127.0.0.1", server.server_port)
-
-    conn.request("POST", f"/runs/{run_id}/resume")
-    response = conn.getresponse()
-    response.read()
-
-    conn.close()
-    thread.join(timeout=5)
-    server.server_close()
-    assert response.status == 409
-    assert gateway.audit_store.get_run(run_id)["status"] == "waiting_for_approval"
-    assert "return a - b" in (workspace / "math_utils.py").read_text(
-        encoding="utf-8"
-    )
 
 
 def test_safe_return_to_rejects_protocol_relative_paths():

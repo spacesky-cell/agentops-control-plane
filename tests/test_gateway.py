@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -159,6 +160,127 @@ def test_scripted_agent_resumes_after_approval(tmp_path):
     assert any(event["type"] == "approval_used" for event in events)
 
 
+def test_resume_fails_closed_if_run_finishes_after_approval_read(tmp_path, monkeypatch):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    agent = ScriptedAgent(
+        name="test-agent",
+        steps=[
+            {
+                "tool": "write_file",
+                "args": {"path": "notes.txt", "content": "approved"},
+            }
+        ],
+    )
+    run_id = agent.run(gateway, "resume race", auto_approve=False)
+    approval = gateway.audit_store.list_approvals(run_id)[0]
+    gateway.audit_store.decide_approval(approval["id"], "approved", "reviewer")
+
+    original_resume = gateway.audit_store.resume_run
+
+    def finish_before_resume(candidate: str) -> bool:
+        gateway.audit_store.finish_run(candidate, "failed", message="race winner")
+        return original_resume(candidate)
+
+    monkeypatch.setattr(gateway.audit_store, "resume_run", finish_before_resume)
+    with pytest.raises(ValueError, match="not waiting for approval"):
+        agent.resume(gateway, run_id, approver="reviewer")
+
+    run = gateway.audit_store.get_run(run_id)
+    assert run["status"] == "failed"
+    assert not (Path(run["workspace_path"]) / "notes.txt").exists()
+    assert len([event for event in gateway.audit_store.get_events(run_id) if event["type"] == "run_finished"]) == 1
+
+
+def test_concurrent_resume_allows_only_one_execution(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    agent = ScriptedAgent(
+        name="test-agent",
+        steps=[
+            {
+                "tool": "write_file",
+                "args": {"path": "notes.txt", "content": "approved"},
+            }
+        ],
+    )
+    run_id = agent.run(gateway, "concurrent resume", auto_approve=False)
+    approval = gateway.audit_store.list_approvals(run_id)[0]
+    gateway.audit_store.decide_approval(approval["id"], "approved", "reviewer")
+
+    def resume_once(_index: int):
+        try:
+            agent.resume(gateway, run_id, approver="reviewer")
+            return "ok"
+        except ValueError as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(resume_once, range(2)))
+
+    assert results.count("ok") == 1
+    assert any("not waiting for approval" in result for result in results if result != "ok")
+    assert gateway.audit_store.get_run(run_id)["status"] == "success"
+    assert len([event for event in gateway.audit_store.get_events(run_id) if event["type"] == "run_finished"]) == 1
+
+
+def test_duplicate_finish_preserves_winning_snapshot_and_cleans_loser(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    run_id, workspace = gateway.start_run("immutable snapshot", "test-agent")
+    (workspace / "state.txt").write_text("state-one", encoding="utf-8")
+
+    gateway.finish_run(run_id, workspace, "success")
+    events = gateway.audit_store.get_events(run_id)
+    finished = [event for event in events if event["type"] == "run_finished"]
+    winner_snapshot = Path(finished[0]["payload"]["snapshot"])
+    with zipfile.ZipFile(winner_snapshot) as archive:
+        assert archive.read("state.txt") == b"state-one"
+
+    (workspace / "state.txt").write_text("state-two", encoding="utf-8")
+    gateway.finish_run(run_id, workspace, "failed")
+
+    events = gateway.audit_store.get_events(run_id)
+    finished = [event for event in events if event["type"] == "run_finished"]
+    assert gateway.audit_store.get_run(run_id)["status"] == "success"
+    assert len(finished) == 1
+    assert Path(finished[0]["payload"]["snapshot"]) == winner_snapshot
+    with zipfile.ZipFile(winner_snapshot) as archive:
+        assert archive.read("state.txt") == b"state-one"
+    assert not any(
+        path.is_file() and path != winner_snapshot and path.name.startswith(f"{run_id}-after-")
+        for path in gateway.workspace_manager.snapshots_dir.iterdir()
+    )
+
+
+def test_concurrent_gateway_finish_keeps_only_winning_snapshot(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    run_id, workspace = gateway.start_run("concurrent finish", "test-agent")
+    (workspace / "state.txt").write_text("stable", encoding="utf-8")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(
+            pool.map(
+                lambda index: gateway.finish_run(
+                    run_id, workspace, "success" if index % 2 == 0 else "failed"
+                ),
+                range(8),
+            )
+        )
+
+    finished = [
+        event
+        for event in gateway.audit_store.get_events(run_id)
+        if event["type"] == "run_finished"
+    ]
+    after_snapshots = list(
+        gateway.workspace_manager.snapshots_dir.glob(f"{run_id}-after-*.zip")
+    )
+    assert results.count(True) == 1
+    assert results.count(False) == 7
+    assert len(finished) == 1
+    assert after_snapshots == [Path(finished[0]["payload"]["snapshot"])]
+    with zipfile.ZipFile(after_snapshots[0]) as archive:
+        assert archive.read("state.txt") == b"stable"
+
+
 def test_scripted_agent_does_not_resume_after_rejection(tmp_path):
     source = make_sample_repo(tmp_path)
     gateway = RuntimeGateway.from_home(tmp_path / "project")
@@ -183,12 +305,12 @@ def test_scripted_agent_does_not_resume_after_rejection(tmp_path):
     try:
         agent.resume(gateway, run_id, approver="reviewer")
     except ValueError as exc:
-        assert "approved pending action" in str(exc)
+        assert "not waiting for approval: failed" in str(exc)
     else:
         raise AssertionError("resume should reject runs without an approved pending action")
 
     run = gateway.audit_store.get_run(run_id)
-    assert run["status"] == "waiting_for_approval"
+    assert run["status"] == "failed"
 
 
 def test_scripted_agent_requires_approval_for_each_pending_action(tmp_path):
@@ -286,7 +408,12 @@ def test_snapshots_include_workspace_files(tmp_path):
         assert "test_math_utils.py" in archive.namelist()
 
     gateway.finish_run(run_id, workspace, "success")
-    after_snapshot = tmp_path / "project" / ".agentpermit" / "snapshots" / f"{run_id}-after.zip"
+    finished = next(
+        event
+        for event in gateway.audit_store.get_events(run_id)
+        if event["type"] == "run_finished"
+    )
+    after_snapshot = Path(finished["payload"]["snapshot"])
 
     with zipfile.ZipFile(after_snapshot) as archive:
         assert "math_utils.py" in archive.namelist()
@@ -297,6 +424,28 @@ def test_audit_store_records_schema_version(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
 
     assert gateway.audit_store.get_schema_version() == 2
+
+
+def test_audit_finish_run_is_atomic_and_idempotent_under_concurrency(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    run_id, _workspace = gateway.start_run("atomic finish", "test-agent")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(
+            pool.map(
+                lambda _index: gateway.audit_store.finish_run(run_id, "success"),
+                range(8),
+            )
+        )
+
+    assert results.count(True) == 1
+    assert results.count(False) == 7
+    assert gateway.audit_store.finish_run(run_id, "failed") is False
+
+    run = gateway.audit_store.get_run(run_id)
+    events = gateway.audit_store.get_events(run_id)
+    assert run["status"] == "success"
+    assert len([event for event in events if event["type"] == "run_finished"]) == 1
 
 
 def test_started_run_persists_authoritative_workspace_identity(tmp_path):
@@ -412,11 +561,11 @@ def test_audit_store_persists_run_metadata(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     run_id, _workspace = gateway.start_run("metadata run", "test-agent")
 
-    gateway.audit_store.set_run_metadata(run_id, {"adapter": "mcp-plan", "plan_path": "plan.json"})
+    gateway.audit_store.set_run_metadata(run_id, {"transport": "mcp", "task": "metadata run"})
 
     assert gateway.audit_store.get_run_metadata(run_id) == {
-        "adapter": "mcp-plan",
-        "plan_path": "plan.json",
+        "transport": "mcp",
+        "task": "metadata run",
     }
 
 
@@ -424,7 +573,7 @@ def test_setting_unknown_run_metadata_raises_not_found(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
 
     try:
-        gateway.audit_store.set_run_metadata("run_missing", {"adapter": "mcp-plan"})
+        gateway.audit_store.set_run_metadata("run_missing", {"transport": "mcp"})
     except ValueError as exc:
         assert "Run not found: run_missing" in str(exc)
     else:
@@ -447,11 +596,13 @@ def test_waiting_for_approval_keeps_run_open(tmp_path):
     run_id = agent.run(gateway, "approval required", source=source, auto_approve=False)
     run = gateway.audit_store.get_run(run_id)
     events = gateway.audit_store.get_events(run_id)
-    after_snapshot = tmp_path / "project" / ".agentpermit" / "snapshots" / f"{run_id}-after.zip"
+    after_snapshots = list(
+        gateway.workspace_manager.snapshots_dir.glob(f"{run_id}-after-*.zip")
+    )
 
     assert run["status"] == "waiting_for_approval"
     assert run["ended_at"] is None
-    assert not after_snapshot.exists()
+    assert not after_snapshots
     assert not any(event["type"] == "run_finished" for event in events)
 
 

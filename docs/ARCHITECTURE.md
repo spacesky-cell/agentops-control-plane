@@ -8,7 +8,7 @@ complete audit trail.
 ## Components
 
 ```text
-Scripted/OpenAI/Claude/LangGraph AgentAdapter
+Scripted AgentAdapter or standard MCP client
         |
         v
 RuntimeGateway
@@ -46,20 +46,11 @@ backend-specific planning loop, but every tool action still crosses the
 `RuntimeGateway`. `ScriptedAgent` is the deterministic adapter used for demos,
 tests, and resume-flow reference behavior.
 
-`McpPlanAdapter` is a local MCP-style adapter skeleton. It reads a JSON plan of
-tool calls shaped as `{name, arguments}` entries and sends them through the
-same gateway. It is not a full MCP server implementation; it establishes the
-adapter-side contract that a real MCP transport can later feed. It also follows
-the same approval resume pattern as `ScriptedAgent`: the next pending tool call
-must match an approved request fingerprint before it can execute.
-
-`serve-mcp-stdio` exposes a newline-delimited JSON-RPC transport with MCP
-`initialize`, `notifications/initialized`, `tools/list`, `tools/call`,
-`resources/list`, and `prompts/list` methods. It is useful for exercising the
-gateway through a process boundary while giving MCP-style clients the same
-governed tool surface and argument schemas as the local adapters. The transport
-also keeps `run.start`, `tool.call`, and `run.finish` compatibility methods for
-deterministic scripts that do not need the MCP session lifecycle.
+`python -m agentpermit mcp --source <repo> --task <text>` exposes a standard
+newline-delimited MCP JSON-RPC transport with `initialize`,
+`notifications/initialized`, `tools/list`, `tools/call`, `resources/list`, and
+`prompts/list`. The session lazily starts one governed run on its first
+`tools/call`; clean EOF finalizes success while approval waits remain durable.
 
 ## PolicyEngine
 
@@ -127,10 +118,12 @@ the audit database. The tool result returned to the caller remains complete.
 
 When a policy requires approval:
 
-1. The run pauses with status `waiting_for_approval`.
-2. A pending approval row is created.
-3. A reviewer approves or rejects it.
-4. `resume-script` matches the approval to the pending request fingerprint.
+1. A pending approval row is created for the request.
+2. The run pauses atomically with status `waiting_for_approval` while that
+   approval remains pending or approved.
+3. A reviewer approves or rejects the row.
+4. `resume-script` matches the approval to the pending request fingerprint and
+   atomically resumes only a still-waiting run.
 5. The approval is marked `consumed` when the pre-approved action is executed.
 6. The run continues from the pending step.
 
@@ -148,7 +141,7 @@ those execution environments: policy, approval, trace, replay, and reporting.
 - Add Docker and cloud sandbox backends.
 - Add richer MCP resource and prompt providers.
 - Add OpenAI Agents SDK adapter.
-- Add Claude Code/Codex CLI adapter.
+- Add additional standard MCP resources and prompts.
 - Add OpenTelemetry export.
 - Add multi-run evaluation dashboards.
 - Add richer diff rendering and branch/PR integrations.
