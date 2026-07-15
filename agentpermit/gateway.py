@@ -119,6 +119,9 @@ class RuntimeGateway:
     ) -> ToolResult:
         workspace = self._verified_workspace(run_id, workspace)
         with self.audit_store.tool_execution(run_id) as lifecycle:
+            lifecycle_status = self.audit_store.run_status_in_transaction(
+                lifecycle, run_id
+            )
             try:
                 encoded_args = json.dumps(
                     request.args,
@@ -212,6 +215,9 @@ class RuntimeGateway:
                         decision.risk.value,
                         _connection=lifecycle,
                     )
+                    self.audit_store.pause_run_in_transaction(
+                        lifecycle, run_id, resolution.approval_id
+                    )
                     return ToolResult(
                         ToolStatus.PENDING_APPROVAL,
                         error=decision.reason,
@@ -244,6 +250,12 @@ class RuntimeGateway:
                         decision.risk.value,
                         _connection=lifecycle,
                     )
+                self.audit_store.resume_run_in_transaction(lifecycle, run_id)
+            elif lifecycle_status == "waiting_for_approval":
+                raise ValueError(
+                    f"Run is waiting for approval and cannot execute {request.tool_name}: "
+                    f"{run_id}"
+                )
             try:
                 output = self.tool_executor.execute(
                     workspace, request.tool_name, request.args

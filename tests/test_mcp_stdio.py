@@ -426,7 +426,7 @@ def test_approved_pending_approval_stays_waiting_until_identical_retry(tmp_path)
     )
 
 
-def test_approval_approved_before_pause_keeps_run_waiting_until_retry(
+def test_approval_approved_after_atomic_pause_keeps_run_waiting_until_retry(
     tmp_path, monkeypatch
 ):
     source = make_sample_repo(tmp_path)
@@ -441,18 +441,17 @@ def test_approval_approved_before_pause_keeps_run_waiting_until_retry(
             "new": "return a - b",
         },
     }
-    original_pause = gateway.pause_run
+    original_execute = gateway.execute_tool
 
-    def approve_before_pause(
-        run_id: str,
-        status: str = "waiting_for_approval",
-        approval_id: int | None = None,
-    ) -> None:
-        selected_id = approval_id or gateway.audit_store.list_approvals(run_id)[0]["id"]
-        gateway.audit_store.decide_approval(selected_id, "approved", "reviewer", "ok")
-        original_pause(run_id, status, selected_id)
+    def approve_after_atomic_pause(*args, **kwargs):
+        result = original_execute(*args, **kwargs)
+        if result.status.value == "pending_approval":
+            gateway.audit_store.decide_approval(
+                result.approval_id, "approved", "reviewer", "ok"
+            )
+        return result
 
-    monkeypatch.setattr(gateway, "pause_run", approve_before_pause)
+    monkeypatch.setattr(gateway, "execute_tool", approve_after_atomic_pause)
     first = session.handle(
         {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params}
     )
@@ -742,19 +741,41 @@ def test_input_transport_failure_marks_running_run_failed_and_reraises(tmp_path)
     gateway = RuntimeGateway.from_home(tmp_path / "project")
 
     class BrokenInput:
-        def __iter__(self):
-            yield json.dumps(
-                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+        def __init__(self):
+            self.buffer = StringIO(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": 1,
+                                "method": "initialize",
+                                "params": {},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "method": "notifications/initialized",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": 2,
+                                "method": "tools/call",
+                                "params": {"name": "list_files", "arguments": {}},
+                            }
+                        ),
+                    ]
+                )
+                + "\n"
             )
-            yield json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
-            yield json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/call",
-                    "params": {"name": "list_files", "arguments": {}},
-                }
-            )
+
+        def readline(self, size: int = -1):
+            chunk = self.buffer.readline(size)
+            if chunk:
+                return chunk
             raise OSError("broken transport")
 
     with pytest.raises(OSError, match="broken transport"):

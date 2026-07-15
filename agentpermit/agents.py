@@ -80,9 +80,7 @@ class ScriptedAgent(AgentAdapter):
             ):
                 status = "failed"
                 break
-        if status == "waiting_for_approval":
-            gateway.pause_run(run_id, status)
-        else:
+        if status != "waiting_for_approval":
             gateway.finish_run(run_id, workspace, status)
         return run_id
 
@@ -158,8 +156,6 @@ class ScriptedAgent(AgentAdapter):
             ):
                 status = "failed"
                 break
-        if status == "waiting_for_approval":
-            gateway.pause_run(run_id, status)
-        else:
+        if status != "waiting_for_approval":
             gateway.finish_run(run_id, workspace, status)
         return run_id

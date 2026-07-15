@@ -21,6 +21,31 @@ def _initialized(session: McpStdioSession) -> None:
     session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
 
+class _BoundedReadOnlyStream:
+    def __init__(self, content: str, max_read_chars: int) -> None:
+        self.content = content
+        self.max_read_chars = max_read_chars
+        self.offset = 0
+        self.read_sizes: list[int] = []
+
+    def __iter__(self):
+        raise AssertionError("unbounded stream iteration is forbidden")
+
+    def readline(self, size: int = -1) -> str:
+        assert 0 < size <= self.max_read_chars
+        self.read_sizes.append(size)
+        end = min(self.offset + size, len(self.content))
+        newline = self.content.find("\n", self.offset, end)
+        if newline >= 0:
+            end = newline + 1
+        chunk = self.content[self.offset : end]
+        self.offset = end
+        return chunk
+
+    def read(self, size: int = -1) -> str:
+        raise AssertionError(f"read({size}) is forbidden; use bounded readline(size)")
+
+
 @pytest.mark.parametrize("status", ["success", "failed"])
 def test_gateway_rejects_tool_execution_and_workspace_resume_after_terminal_run(
     tmp_path: Path, status: str
@@ -42,19 +67,31 @@ def test_terminal_run_rejects_approval_decision_and_cancels_pending_approval(
 ) -> None:
     gateway = RuntimeGateway.from_home(tmp_path / "home")
     run_id, workspace = gateway.start_run("terminal approval", "test")
-    pending = gateway.execute_tool(
-        run_id,
-        workspace,
-        ToolRequest("write_file", {"path": "out.txt", "content": "pending"}, "test"),
-    )
-    assert pending.status == ToolStatus.PENDING_APPROVAL
+    if run_status == "success":
+        approval_id = gateway.audit_store.create_approval(
+            run_id,
+            "write_file",
+            {"args": {"path": "out.txt", "content": "pending"}},
+            "File writes require approval by policy.",
+        )
+    else:
+        pending = gateway.execute_tool(
+            run_id,
+            workspace,
+            ToolRequest(
+                "write_file", {"path": "out.txt", "content": "pending"}, "test"
+            ),
+        )
+        assert pending.status == ToolStatus.PENDING_APPROVAL
+        assert pending.approval_id is not None
+        approval_id = pending.approval_id
     assert gateway.finish_run(run_id, workspace, run_status)
 
-    approval = gateway.audit_store.get_approval(pending.approval_id)
+    approval = gateway.audit_store.get_approval(approval_id)
     assert approval is not None and approval["status"] == "cancelled"
     with pytest.raises(ApprovalStateConflictError, match=f"terminal.*{run_status}"):
         gateway.audit_store.decide_approval(
-            pending.approval_id, decision, "reviewer", "too late"
+            approval_id, decision, "reviewer", "too late"
         )
 
 
@@ -184,7 +221,7 @@ def test_terminalization_winner_blocks_approval_consumption_and_execution(
 
     monkeypatch.setattr(gateway.workspace_manager, "snapshot", blocked_snapshot)
     finish_thread = threading.Thread(
-        target=lambda: gateway.finish_run(run_id, workspace, "success")
+        target=lambda: gateway.finish_run(run_id, workspace, "failed")
     )
     finish_thread.start()
     assert snapshot_entered.wait(5)
@@ -206,6 +243,7 @@ def test_terminalization_winner_blocks_approval_consumption_and_execution(
 
     assert not finish_thread.is_alive() and not tool_thread.is_alive()
     assert isinstance(result[0], ValueError)
+    assert "terminal with status failed" in str(result[0])
 
 
 @pytest.mark.parametrize(
@@ -393,6 +431,202 @@ def test_mcp_frame_limit_rejects_before_parse_and_accepts_exact_boundary(
         "max_bytes": len(frame.encode("utf-8")) - 1,
         "actual_bytes": len(frame.encode("utf-8")),
     }
+
+
+def test_mcp_frame_reader_uses_bounded_reads_and_recovers_next_frame(
+    tmp_path: Path,
+) -> None:
+    limit = 128
+    valid = json.dumps(
+        {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}},
+        separators=(",", ":"),
+    )
+    stream = _BoundedReadOnlyStream("x" * 200 + "\n" + valid + "\n", limit + 1)
+    output = StringIO()
+
+    serve_json_lines(
+        RuntimeGateway.from_home(
+            tmp_path / "home", PolicyConfig(max_mcp_frame_bytes=limit)
+        ),
+        stream,
+        output,
+    )
+
+    responses = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert responses[0]["error"] == {
+        "code": -32001,
+        "message": "MCP frame exceeds max_mcp_frame_bytes.",
+        "data": {
+            "limit": "max_mcp_frame_bytes",
+            "max_bytes": limit,
+            "actual_bytes": 200,
+        },
+    }
+    assert responses[1]["id"] == 2
+    assert responses[1]["result"]["serverInfo"]["name"] == "agentpermit"
+    assert stream.read_sizes and max(stream.read_sizes) <= limit + 1
+
+
+def test_mcp_frame_reader_rejects_oversized_unterminated_frame(tmp_path: Path) -> None:
+    limit = 8
+    stream = _BoundedReadOnlyStream("z" * 25, limit + 1)
+    output = StringIO()
+
+    serve_json_lines(
+        RuntimeGateway.from_home(
+            tmp_path / "home", PolicyConfig(max_mcp_frame_bytes=limit)
+        ),
+        stream,
+        output,
+    )
+
+    error = json.loads(output.getvalue())["error"]
+    assert error["code"] == -32001
+    assert error["data"]["actual_bytes"] == 25
+
+
+def test_mcp_frame_reader_enforces_exact_multibyte_utf8_bytes(tmp_path: Path) -> None:
+    frame = json.dumps("你", ensure_ascii=False)
+    frame_bytes = len(frame.encode("utf-8"))
+    exact_output = StringIO()
+    serve_json_lines(
+        RuntimeGateway.from_home(
+            tmp_path / "exact", PolicyConfig(max_mcp_frame_bytes=frame_bytes)
+        ),
+        _BoundedReadOnlyStream(frame + "\n", frame_bytes + 1),
+        exact_output,
+    )
+    assert json.loads(exact_output.getvalue())["error"]["code"] == -32600
+
+    limited_output = StringIO()
+    serve_json_lines(
+        RuntimeGateway.from_home(
+            tmp_path / "limited", PolicyConfig(max_mcp_frame_bytes=frame_bytes - 1)
+        ),
+        _BoundedReadOnlyStream(frame + "\n", frame_bytes),
+        limited_output,
+    )
+    error = json.loads(limited_output.getvalue())["error"]
+    assert error["code"] == -32001
+    assert error["data"]["actual_bytes"] == frame_bytes
+
+
+def test_pending_approval_wins_clean_finish_race_with_atomic_pause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway = RuntimeGateway.from_home(tmp_path / "home")
+    session = McpStdioSession(gateway, task="pending wins")
+    _initialized(session)
+    original_execute = gateway.execute_tool
+    finish_results: list[bool] = []
+
+    def finish_after_pending_commit(*args: object, **kwargs: object):
+        result = original_execute(*args, **kwargs)
+        run_id = str(args[0])
+        assert session.workspace is not None
+        finish_results.append(gateway.finish_run(run_id, session.workspace, "success"))
+        return result
+
+    monkeypatch.setattr(gateway, "execute_tool", finish_after_pending_commit)
+    response = session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "write_file",
+                "arguments": {"path": "out.txt", "content": "pending"},
+            },
+        }
+    )
+
+    assert response["result"]["isError"] is True
+    assert "pending_approval" in response["result"]["content"][0]["text"]
+    assert "approval_id=" in response["result"]["content"][0]["text"]
+    assert finish_results == [False]
+    assert (
+        gateway.audit_store.get_run(session.run_id)["status"] == "waiting_for_approval"
+    )
+    approvals = gateway.audit_store.list_approvals(session.run_id)
+    assert len(approvals) == 1 and approvals[0]["status"] == "pending"
+    event_types = [
+        event["type"] for event in gateway.audit_store.get_events(session.run_id)
+    ]
+    assert event_types.count("approval_requested") == 1
+    assert event_types.count("run_paused") == 1
+    assert "run_finished" not in event_types
+    assert event_types.index("approval_requested") < event_types.index("run_paused")
+
+
+def test_clean_finish_winner_returns_terminal_tool_error_without_pending_truth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway = RuntimeGateway.from_home(tmp_path / "home")
+    session = McpStdioSession(gateway, task="finish wins")
+    _initialized(session)
+    session.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "list_files", "arguments": {}},
+        }
+    )
+    assert session.run_id is not None and session.workspace is not None
+    snapshot_entered = threading.Event()
+    release_snapshot = threading.Event()
+    original_snapshot = gateway.workspace_manager.snapshot
+
+    def blocked_snapshot(*args: object, **kwargs: object) -> Path:
+        snapshot_entered.set()
+        assert release_snapshot.wait(5)
+        return original_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(gateway.workspace_manager, "snapshot", blocked_snapshot)
+    finish_results: list[bool] = []
+    finish_thread = threading.Thread(
+        target=lambda: finish_results.append(
+            gateway.finish_run(session.run_id, session.workspace, "success")
+        )
+    )
+    finish_thread.start()
+    assert snapshot_entered.wait(5)
+    responses: list[dict[str, object]] = []
+    request_thread = threading.Thread(
+        target=lambda: responses.append(
+            session.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "write_file",
+                        "arguments": {"path": "out.txt", "content": "too late"},
+                    },
+                }
+            )
+        )
+    )
+    request_thread.start()
+    request_thread.join(0.2)
+    assert request_thread.is_alive()
+    release_snapshot.set()
+    finish_thread.join(5)
+    request_thread.join(5)
+
+    assert finish_results == [True]
+    assert responses[0]["result"]["isError"] is True
+    text = responses[0]["result"]["content"][0]["text"]
+    assert "terminal" in text and "success" in text
+    assert "approval_id" not in text
+    assert gateway.audit_store.get_run(session.run_id)["status"] == "success"
+    assert gateway.audit_store.list_approvals(session.run_id) == []
+    event_types = [
+        event["type"] for event in gateway.audit_store.get_events(session.run_id)
+    ]
+    assert event_types.count("run_finished") == 1
+    assert "approval_requested" not in event_types
+    assert "run_paused" not in event_types
 
 
 def test_mcp_transport_ignores_blank_frames(tmp_path: Path) -> None:

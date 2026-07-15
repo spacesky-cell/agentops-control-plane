@@ -155,3 +155,80 @@ Results: example policy parsed successfully and `git diff --check` exited zero.
 - The lifecycle claim intentionally serializes SQLite writers while a bounded
   governed tool executes. This is the conservative correctness tradeoff for the
   supported local, single-user product boundary.
+
+## Second Re-review Fix
+
+### Findings And Owner Corrections
+
+- MCP input previously used `for line in input_stream`, which materialized an
+  unbounded newline-delimited frame before checking `max_mcp_frame_bytes`.
+  `serve_json_lines` now consumes only bounded `readline(size)` chunks. The frame
+  scanner counts exact UTF-8 bytes, retains at most one allowed frame plus one
+  bounded chunk, drains an oversized frame in bounded calls, and resumes at the
+  next frame. Oversized terminated and unterminated frames return the existing
+  structured JSON-RPC `-32001` error.
+- Approval creation and `approval_requested` previously committed before the MCP
+  adapter opened a second transaction to pause the run. `AuditStore` now pauses
+  inside the gateway's existing lifecycle transaction before a pending result is
+  committed. The same transaction owns approval creation/reuse, approval event,
+  `run_paused`, and the pending state returned to the adapter.
+- Successful terminalization is conditional on the run still being `running`.
+  A clean-close attempt based on stale state cannot overwrite a committed
+  `waiting_for_approval` row. Failure terminalization remains available for
+  rejection, transport, and governed tool failures.
+- MCP and scripted adapters no longer perform a second pause. Direct gateway
+  callers retain stable pending retries: the lifecycle claim admits an approval
+  wait, treats the same pause as idempotent, and atomically resumes an approved
+  retry before consumption and execution.
+
+### RED Evidence
+
+```text
+python -m pytest tests/test_final_review_fixes.py -q -k "frame_reader or pending_approval_wins or clean_finish_winner"
+```
+
+Initial result: **5 failed, 39 deselected in 1.23s**. Three failures raised from
+forbidden unbounded stream iteration, one showed a pending MCP response while
+the run had become terminal `success`, and one returned a top-level JSON-RPC
+error instead of a terminal MCP tool error after the finish-first race.
+
+### GREEN And Regression Evidence
+
+The same focused command produced **5 passed, 39 deselected in 0.80s**. Coverage
+includes bounded-read enforcement, an oversized unterminated frame, exact
+multibyte UTF-8 byte accounting, oversized-frame drain followed by a valid frame,
+and both pending/finish race directions with approval and event truth assertions.
+
+An initial broad run exposed a live-stdio integration issue: bounded `read(n)` on
+`TextIOWrapper` waited for `n` characters or EOF, blocking the MCP subprocess
+persistence test. The pytest process and its MCP child were terminated, and no
+AgentPermit test child was left running. The scanner was corrected to bounded
+`readline(size)`, which returns at a newline while retaining the memory bound.
+The complete MCP suite then produced **31 passed in 4.11s**.
+
+Broad lifecycle/MCP/agent/security verification:
+
+```text
+python -m pytest tests/test_final_review_fixes.py tests/test_mcp_stdio.py tests/test_gateway.py tests/test_agents.py tests/test_approval_security.py -q -rs
+```
+
+Result: **151 passed, 10 skipped in 17.77s**.
+
+Full verification:
+
+```text
+python -m pytest --cov=agentpermit --cov-report=term-missing --cov-fail-under=90 -q
+npm test
+python -m ruff format --check agentpermit tests scripts
+python -m ruff check agentpermit tests scripts
+python -m mypy --no-incremental agentpermit
+python -m pytest tests/test_workflows.py -q
+python -c "import yaml; [yaml.safe_load(open(p, encoding='utf-8')) for p in ['.github/workflows/ci.yml','.github/workflows/release.yml']]"
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.9
+git diff --check
+```
+
+Results: **328 passed, 10 skipped, 90.01% coverage**; npm **16 passed**;
+Ruff format/check and mypy clean; workflow tests **6 passed**; workflow YAML,
+actionlint, and diff checks exited zero. The existing ten platform skips and
+pytest-asyncio loop-scope warning remain unchanged.

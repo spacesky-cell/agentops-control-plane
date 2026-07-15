@@ -400,6 +400,9 @@ class AuditStore:
             if row is None or str(row["status"]) in {"success", "failed"}:
                 conn.rollback()
                 return False
+            if status == "success" and str(row["status"]) != "running":
+                conn.rollback()
+                return False
             if payload_factory is not None:
                 payload = payload_factory()
             changed = self._finish_run_in_transaction(
@@ -425,14 +428,24 @@ class AuditStore:
         decision: str | None = None,
     ) -> bool:
         ended_at = ended_at or utc_now()
-        cursor = conn.execute(
-            """
-            UPDATE runs
-            SET status = ?, ended_at = ?
-            WHERE id = ? AND status NOT IN ('success', 'failed')
-            """,
-            (status, ended_at, run_id),
-        )
+        if status == "success":
+            cursor = conn.execute(
+                """
+                UPDATE runs
+                SET status = ?, ended_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (status, ended_at, run_id),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                UPDATE runs
+                SET status = ?, ended_at = ?
+                WHERE id = ? AND status NOT IN ('success', 'failed')
+                """,
+                (status, ended_at, run_id),
+            )
         if cursor.rowcount != 1:
             return False
         conn.execute(
@@ -474,7 +487,7 @@ class AuditStore:
             if status in {"success", "failed"}:
                 conn.rollback()
                 raise ValueError(f"Run is terminal with status {status}: {run_id}")
-            if status != "running":
+            if status not in {"running", "waiting_for_approval"}:
                 conn.rollback()
                 raise ValueError(f"Run is not running: {run_id} ({status})")
             try:
@@ -493,32 +506,90 @@ class AuditStore:
     ) -> bool:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            cursor = conn.execute(
-                """
-                UPDATE runs
-                SET status = ?, ended_at = NULL
-                WHERE id = ?
-                  AND status = 'running'
-                  AND EXISTS (
-                      SELECT 1 FROM approvals
-                      WHERE approvals.run_id = runs.id
-                        AND approvals.status IN ('pending', 'approved')
-                        AND (? IS NULL OR approvals.id = ?)
-                  )
-                """,
-                (status, run_id, approval_id, approval_id),
-            )
-            if cursor.rowcount == 1:
-                conn.execute(
-                    """
-                    INSERT INTO events (
-                        run_id, ts, type, tool_name, decision, risk, message, payload_json
-                    ) VALUES (?, ?, 'run_paused', NULL, NULL, NULL, ?, '{}')
-                    """,
-                    (run_id, utc_now(), f"Run paused with status {status}."),
-                )
+            changed = self._pause_run_in_transaction(conn, run_id, status, approval_id)
             conn.commit()
-            return cursor.rowcount == 1
+            return changed
+
+    def pause_run_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        run_id: str,
+        approval_id: int,
+        status: str = "waiting_for_approval",
+    ) -> None:
+        if self._pause_run_in_transaction(conn, run_id, status, approval_id):
+            return
+        existing = conn.execute(
+            """
+            SELECT 1
+            FROM runs
+            JOIN approvals ON approvals.run_id = runs.id
+            WHERE runs.id = ?
+              AND runs.status = ?
+              AND approvals.id = ?
+              AND approvals.status IN ('pending', 'approved')
+            """,
+            (run_id, status, approval_id),
+        ).fetchone()
+        if existing is None:
+            raise ApprovalStateConflictError(
+                f"Run {run_id} could not be paused for approval {approval_id}."
+            )
+
+    def _pause_run_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        run_id: str,
+        status: str,
+        approval_id: int | None,
+    ) -> bool:
+        cursor = conn.execute(
+            """
+            UPDATE runs
+            SET status = ?, ended_at = NULL
+            WHERE id = ?
+              AND status = 'running'
+              AND EXISTS (
+                  SELECT 1 FROM approvals
+                  WHERE approvals.run_id = runs.id
+                    AND approvals.status IN ('pending', 'approved')
+                    AND (? IS NULL OR approvals.id = ?)
+              )
+            """,
+            (status, run_id, approval_id, approval_id),
+        )
+        if cursor.rowcount == 1:
+            conn.execute(
+                """
+                INSERT INTO events (
+                    run_id, ts, type, tool_name, decision, risk, message, payload_json
+                ) VALUES (?, ?, 'run_paused', NULL, NULL, NULL, ?, '{}')
+                """,
+                (run_id, utc_now(), f"Run paused with status {status}."),
+            )
+        return cursor.rowcount == 1
+
+    def run_status_in_transaction(self, conn: sqlite3.Connection, run_id: str) -> str:
+        row = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Run not found: {run_id}")
+        return str(row["status"])
+
+    def resume_run_in_transaction(self, conn: sqlite3.Connection, run_id: str) -> None:
+        cursor = conn.execute(
+            """
+            UPDATE runs
+            SET status = 'running', ended_at = NULL
+            WHERE id = ? AND status = 'waiting_for_approval'
+            """,
+            (run_id,),
+        )
+        if cursor.rowcount == 1:
+            return
+        if self.run_status_in_transaction(conn, run_id) != "running":
+            raise ApprovalStateConflictError(
+                f"Run {run_id} could not resume for approved execution."
+            )
 
     def resume_run(self, run_id: str) -> bool:
         """Atomically transition an approval-paused run back to running."""

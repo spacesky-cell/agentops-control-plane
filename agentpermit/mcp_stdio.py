@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Iterator, TextIO
 
 from . import __version__
 from .gateway import RuntimeGateway
@@ -290,21 +290,30 @@ class McpStdioSession:
                     "error": "The governed run is no longer waiting for approval; retry was not executed.",
                 }
 
-        result = self.gateway.execute_tool(
-            self.run_id,
-            self.workspace,
-            request,
-            auto_approve=self.auto_approve,
-        )
+        try:
+            result = self.gateway.execute_tool(
+                self.run_id,
+                self.workspace,
+                request,
+                auto_approve=self.auto_approve,
+            )
+        except ValueError:
+            run = self.gateway.audit_store.get_run(self.run_id)
+            if run is None or str(run["status"]) not in {"success", "failed"}:
+                raise
+            return {
+                "status": ToolStatus.FAILED.value,
+                "ok": False,
+                "output": None,
+                "error": (
+                    "This governed run is terminal with status "
+                    f"{run['status']}; the tool call was not executed."
+                ),
+            }
         if result.status == ToolStatus.PENDING_APPROVAL:
             if self._pending_approval_id is None:
                 self._pending_request_fingerprint = request_fingerprint
                 self._pending_approval_id = result.approval_id
-                self.gateway.pause_run(
-                    self.run_id,
-                    "waiting_for_approval",
-                    approval_id=result.approval_id,
-                )
         else:
             self._pending_request_fingerprint = None
             self._pending_approval_id = None
@@ -454,13 +463,11 @@ def serve_json_lines(
         auto_approve=auto_approve,
     )
     try:
-        for line in input_stream:
-            if not line.strip():
+        frame_limit = gateway.policy_engine.config.max_mcp_frame_bytes
+        for frame, frame_bytes in _read_bounded_frames(input_stream, frame_limit):
+            if frame is not None and not frame.strip():
                 continue
-            frame = line.rstrip("\r\n")
-            frame_bytes = len(frame.encode("utf-8"))
-            frame_limit = gateway.policy_engine.config.max_mcp_frame_bytes
-            if frame_bytes > frame_limit:
+            if frame is None:
                 frame_response = {
                     "jsonrpc": "2.0",
                     "id": None,
@@ -501,3 +508,52 @@ def serve_json_lines(
             raise
     else:
         session.close()
+
+
+def _read_bounded_frames(
+    input_stream: TextIO, max_bytes: int
+) -> Iterator[tuple[str | None, int]]:
+    """Read newline-delimited frames without materializing an oversized line."""
+    chunk_chars = min(4096, max_bytes + 1)
+    frame_chars: list[str] = []
+    frame_bytes = 0
+    oversized = False
+    pending_carriage_return = False
+
+    def append_character(character: str) -> None:
+        nonlocal frame_bytes, oversized
+        frame_bytes += len(character.encode("utf-8"))
+        if oversized:
+            return
+        if frame_bytes > max_bytes:
+            oversized = True
+            frame_chars.clear()
+            return
+        frame_chars.append(character)
+
+    while True:
+        chunk = input_stream.readline(chunk_chars)
+        if chunk == "":
+            if pending_carriage_return:
+                append_character("\r")
+                pending_carriage_return = False
+            if frame_bytes or oversized or frame_chars:
+                yield (None if oversized else "".join(frame_chars), frame_bytes)
+            return
+        if not isinstance(chunk, str):
+            raise TypeError("MCP input stream must return text from readline(size).")
+        for character in chunk:
+            if character == "\n":
+                pending_carriage_return = False
+                yield (None if oversized else "".join(frame_chars), frame_bytes)
+                frame_chars = []
+                frame_bytes = 0
+                oversized = False
+                continue
+            if pending_carriage_return:
+                append_character("\r")
+                pending_carriage_return = False
+            if character == "\r":
+                pending_carriage_return = True
+            else:
+                append_character(character)
