@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from io import StringIO
 from pathlib import Path
 
@@ -558,19 +559,30 @@ def test_rejection_between_close_read_and_finish_keeps_one_terminal_event(
     approval_id = gateway.audit_store.list_approvals(session.run_id)[0]["id"]
     gateway.audit_store.resume_run(session.run_id)
     original_snapshot = gateway.workspace_manager.snapshot
-    rejected = False
+    decision_started = threading.Event()
+    decision_errors = []
+    decision_thread = None
 
-    def reject_during_snapshot(*args, **kwargs):
-        nonlocal rejected
-        if not rejected:
-            rejected = True
+    def reject_after_terminal_claim():
+        decision_started.set()
+        try:
             gateway.audit_store.decide_approval(
                 approval_id, "rejected", "reviewer", "no"
             )
+        except Exception as exc:  # noqa: BLE001 - assert the losing race result.
+            decision_errors.append(exc)
+
+    def reject_during_snapshot(*args, **kwargs):
+        nonlocal decision_thread
+        decision_thread = threading.Thread(target=reject_after_terminal_claim)
+        decision_thread.start()
+        assert decision_started.wait(5)
         return original_snapshot(*args, **kwargs)
 
     monkeypatch.setattr(gateway.workspace_manager, "snapshot", reject_during_snapshot)
     session.close()
+    assert decision_thread is not None
+    decision_thread.join(5)
 
     run = gateway.audit_store.get_run(session.run_id)
     finished = [
@@ -578,12 +590,12 @@ def test_rejection_between_close_read_and_finish_keeps_one_terminal_event(
         for event in gateway.audit_store.get_events(session.run_id)
         if event["type"] == "run_finished"
     ]
-    assert run["status"] == "failed"
+    assert run["status"] == "success"
     assert len(finished) == 1
-    assert finished[0]["payload"] == {
-        "reason": "approval_rejected",
-        "approval_id": approval_id,
-    }
+    assert "snapshot" in finished[0]["payload"]
+    assert len(decision_errors) == 1
+    assert "terminal with status success" in str(decision_errors[0])
+    assert gateway.audit_store.get_approval(approval_id)["status"] == "cancelled"
 
 
 def test_different_tool_after_external_rejection_fails_without_execution(tmp_path):

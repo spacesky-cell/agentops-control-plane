@@ -377,6 +377,16 @@ class McpStdioSession:
                 "isError": False,
             }
         message = payload.get("error") or payload["status"]
+        if payload.get("output") is not None:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    }
+                ],
+                "isError": True,
+            }
         if payload.get("approval_id") is not None:
             message = (
                 f"{payload['status']}: {message} approval_id={payload['approval_id']}"
@@ -447,9 +457,31 @@ def serve_json_lines(
         for line in input_stream:
             if not line.strip():
                 continue
+            frame = line.rstrip("\r\n")
+            frame_bytes = len(frame.encode("utf-8"))
+            frame_limit = gateway.policy_engine.config.max_mcp_frame_bytes
+            if frame_bytes > frame_limit:
+                frame_response = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32001,
+                        "message": "MCP frame exceeds max_mcp_frame_bytes.",
+                        "data": {
+                            "limit": "max_mcp_frame_bytes",
+                            "max_bytes": frame_limit,
+                            "actual_bytes": frame_bytes,
+                        },
+                    },
+                }
+                output_stream.write(
+                    json.dumps(frame_response, ensure_ascii=False) + "\n"
+                )
+                output_stream.flush()
+                continue
             response: dict[str, Any] | None
             try:
-                request = json.loads(line)
+                request = json.loads(frame)
             except json.JSONDecodeError:
                 response = {
                     "jsonrpc": "2.0",

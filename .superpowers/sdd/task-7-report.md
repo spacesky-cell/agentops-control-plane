@@ -10,11 +10,11 @@
 
 ## GREEN Evidence
 
-- Full Python suite: **271 passed, 10 skipped**.
+- Full Python suite: **283 passed, 10 skipped**.
 - Coverage gate: **90.01%** (2,612/2,902 statements; 290 missed), with `precision = 2` and `fail_under = 90`.
 - Ruff: `30 files already formatted`; `All checks passed!`.
 - Mypy: `Success: no issues found in 17 source files`.
-- npm tests: **13/13 passed**.
+- npm tests: **16/16 passed**.
 - Deterministic eval: `total=1, passed=1, failed=0`.
 - Python build: wheel and sdist built as `agentpermit-0.2.0`.
 - npm pack dry-run: `agentpermit-0.2.0.tgz`, 21 files, no install hooks/dependencies.
@@ -61,7 +61,7 @@ The threshold is met with meaningful tests for CLI workflows, policy boundaries,
 ## Permissions And Secret Boundary
 
 - Workflow default permission is `contents: read`.
-- npm publication is isolated to the protected `npm` environment and receives only `contents: read` plus `id-token: write`.
+- npm publication is isolated to the protected `npm` environment and receives only `id-token: write`; every unspecified permission is disabled.
 - First publication uses `secrets.NPM_TOKEN` through `NODE_AUTH_TOKEN`; no credential is stored in source or artifacts.
 - npm publish uses `--provenance --access public`.
 - GitHub Release runs only after npm publication succeeds and receives `contents: write`.
@@ -82,6 +82,7 @@ npm pack --silent
 python scripts/validate_release.py --tag v0.2.0 --npm-tgz agentpermit-0.2.0.tgz --wheel dist/agentpermit-0.2.0-py3-none-any.whl --sdist dist/agentpermit-0.2.0.tar.gz
 node scripts/smoke_npm_artifact.mjs agentpermit-0.2.0.tgz
 python -c "import yaml; [yaml.safe_load(open(p, encoding='utf-8')) for p in ['.github/workflows/ci.yml','.github/workflows/release.yml']]"
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.9
 git diff --check
 ```
 

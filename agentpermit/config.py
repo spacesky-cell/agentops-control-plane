@@ -5,6 +5,23 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 
 
+class ResourceLimitError(ValueError):
+    def __init__(self, limit: str, max_bytes: int, actual_bytes: int) -> None:
+        self.limit = limit
+        self.max_bytes = max_bytes
+        self.actual_bytes = actual_bytes
+        super().__init__(
+            f"{limit} exceeded: {actual_bytes} bytes is greater than {max_bytes} bytes."
+        )
+
+    def to_dict(self) -> dict[str, int | str]:
+        return {
+            "limit": self.limit,
+            "max_bytes": self.max_bytes,
+            "actual_bytes": self.actual_bytes,
+        }
+
+
 @dataclass
 class PolicyConfig:
     command_allow_prefixes: list[list[str]] = field(
@@ -102,6 +119,10 @@ class PolicyConfig:
     unknown_command_requires_approval: bool = True
     max_command_seconds: int = 30
     max_output_chars: int = 8000
+    max_mcp_frame_bytes: int = 1_048_576
+    max_tool_argument_bytes: int = 262_144
+    max_file_bytes: int = 1_048_576
+    max_source_bytes: int = 16_777_216
 
     def __post_init__(self) -> None:
         self._validate_command_rules(
@@ -112,6 +133,12 @@ class PolicyConfig:
         )
         self._validate_positive_int("max_command_seconds", self.max_command_seconds)
         self._validate_positive_int("max_output_chars", self.max_output_chars)
+        self._validate_positive_int("max_mcp_frame_bytes", self.max_mcp_frame_bytes)
+        self._validate_positive_int(
+            "max_tool_argument_bytes", self.max_tool_argument_bytes
+        )
+        self._validate_positive_int("max_file_bytes", self.max_file_bytes)
+        self._validate_positive_int("max_source_bytes", self.max_source_bytes)
 
     @staticmethod
     def _validate_command_rules(name: str, rules: list[list[str]]) -> None:

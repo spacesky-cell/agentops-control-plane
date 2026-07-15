@@ -9,9 +9,9 @@ import zipfile
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import BinaryIO, Callable, Iterator
 
-from .config import PolicyConfig, is_protected_path
+from .config import PolicyConfig, ResourceLimitError, is_protected_path
 
 
 _WIN_GENERIC_READ = 0x80000000
@@ -315,8 +315,9 @@ class WorkspaceManager:
     def write_text(
         self, workspace: str | Path, relative: str, content: str
     ) -> str | None:
+        encoded = self._encode_text(content)
+        self._require_size("max_file_bytes", len(encoded), self.config.max_file_bytes)
         with self._leased_path(workspace, relative, create_parents=True) as access:
-            encoded = self._encode_text(content)
             if access.target_identity is None:
                 fd = self._open_new(access)
                 before = None
@@ -325,7 +326,7 @@ class WorkspaceManager:
                 before = None
             with os.fdopen(fd, "r+b") as handle:
                 if access.target_identity is not None:
-                    before = self._decode_text(handle.read())
+                    before = self._decode_text(self._read_bounded(handle, access.path))
                 self._verify_open_file(handle.fileno(), access, allow_created=True)
                 handle.seek(0)
                 handle.truncate()
@@ -339,14 +340,18 @@ class WorkspaceManager:
         with self._leased_path(workspace, relative) as access:
             fd = self._open_existing(access, os.O_RDWR)
             with os.fdopen(fd, "r+b") as handle:
-                text = self._decode_text(handle.read())
+                text = self._decode_text(self._read_bounded(handle, access.path))
                 if old not in text:
                     raise ValueError(f"Patch target text not found in {relative}")
                 updated = text.replace(old, new, 1)
+                encoded = self._encode_text(updated)
+                self._require_size(
+                    "max_file_bytes", len(encoded), self.config.max_file_bytes
+                )
                 self._verify_open_file(handle.fileno(), access)
                 handle.seek(0)
                 handle.truncate()
-                handle.write(self._encode_text(updated))
+                handle.write(encoded)
                 handle.flush()
             return text, updated
 
@@ -485,7 +490,9 @@ class WorkspaceManager:
                     lease, Path(), change_prefix="Source file changed during copy"
                 )
             )
-            self._copy_source_directory(lease, Path(), workspace, protected_identities)
+            self._copy_source_directory(
+                lease, Path(), workspace, protected_identities, [0]
+            )
 
     def _copy_source_directory(
         self,
@@ -493,6 +500,7 @@ class WorkspaceManager:
         relative: Path,
         workspace: Path,
         protected_identities: frozenset[tuple[int, int]],
+        copied_bytes: list[int],
     ) -> None:
         for name in self._child_names(source):
             child_relative = relative / name
@@ -520,6 +528,7 @@ class WorkspaceManager:
                         child_relative,
                         workspace,
                         protected_identities,
+                        copied_bytes,
                     )
             elif stat.S_ISREG(child_stat.st_mode):
                 allowed, content = self._read_leased_file(
@@ -531,9 +540,16 @@ class WorkspaceManager:
                     read_content=True,
                 )
                 if allowed:
-                    self._write_bytes(workspace, child_relative, content or b"")
+                    file_content = content or b""
+                    aggregate = copied_bytes[0] + len(file_content)
+                    self._require_size(
+                        "max_source_bytes", aggregate, self.config.max_source_bytes
+                    )
+                    self._write_bytes(workspace, child_relative, file_content)
+                    copied_bytes[0] = aggregate
 
     def _write_bytes(self, workspace: Path, relative: Path, content: bytes) -> None:
+        self._require_size("max_file_bytes", len(content), self.config.max_file_bytes)
         with self._leased_path(
             workspace,
             str(relative),
@@ -561,7 +577,7 @@ class WorkspaceManager:
     def _read_access(self, access: _PathAccess) -> bytes:
         fd = self._open_existing(access, os.O_RDONLY)
         with os.fdopen(fd, "rb") as handle:
-            return handle.read()
+            return self._read_bounded(handle, access.path)
 
     def _read_leased_file(
         self,
@@ -591,10 +607,25 @@ class WorkspaceManager:
                 return False, None
             with os.fdopen(fd, "rb") as handle:
                 fd = -1
-                return True, handle.read() if read_content else None
+                return (
+                    True,
+                    self._read_bounded(handle, path) if read_content else None,
+                )
         finally:
             if fd >= 0:
                 os.close(fd)
+
+    def _read_bounded(self, handle: BinaryIO, path: Path) -> bytes:
+        file_size = os.fstat(handle.fileno()).st_size
+        self._require_size("max_file_bytes", file_size, self.config.max_file_bytes)
+        content = handle.read(self.config.max_file_bytes + 1)
+        self._require_size("max_file_bytes", len(content), self.config.max_file_bytes)
+        return content
+
+    @staticmethod
+    def _require_size(limit: str, actual: int, maximum: int) -> None:
+        if actual > maximum:
+            raise ResourceLimitError(limit, maximum, actual)
 
     def _open_existing(self, access: _PathAccess, flags: int) -> int:
         if access.target_identity is None:

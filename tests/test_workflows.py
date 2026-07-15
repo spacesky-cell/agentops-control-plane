@@ -122,3 +122,13 @@ def test_smoke_workflows_use_tarball_environment_fallback() -> None:
         text = workflow.read_text(encoding="utf-8")
         if "smoke_npm_artifact.mjs" in text:
             assert "smoke_npm_artifact.mjs\n" in text
+
+
+def test_windows_ci_runs_security_sensitive_python_suite() -> None:
+    workflow = _load(ROOT / ".github" / "workflows" / "ci.yml")
+    job = workflow["jobs"]["windows-python"]
+
+    assert job["runs-on"] == "windows-latest"
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "pip install" in commands
+    assert "python -m pytest -q" in commands

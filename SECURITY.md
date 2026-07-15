@@ -16,6 +16,8 @@ AgentPermit supports a loopback-only, local, single-user deployment. The dashboa
 
 Protected globs exclude configured files from source copy, workspace listing, snapshots, and file tools. Durable event payloads redact secret-shaped keys and known credential formats. These controls reduce accidental exposure but are defense in depth, not data loss prevention.
 
+Policy limits are enforced before MCP parsing, direct gateway execution, and file content loading. Defaults are 1,048,576 bytes per MCP frame, 262,144 bytes per tool argument object, 1,048,576 bytes per file, and 16,777,216 aggregate bytes copied from a source tree. Configure these with `max_mcp_frame_bytes`, `max_tool_argument_bytes`, `max_file_bytes`, and `max_source_bytes`; each must remain a positive integer. Limits bound AgentPermit processing, but they do not constrain host access by an allowed command.
+
 ## Explicit limitations
 
 - A copied workspace is not a container, virtual machine, or operating-system sandbox.

@@ -141,10 +141,9 @@ def test_rejected_matching_approval_is_terminal(tmp_path):
         pending.approval_id, "rejected", "reviewer", "unsafe"
     )
 
-    result = gateway.execute_tool(run_id, workspace, request, preapproved_by="reviewer")
+    with pytest.raises(ValueError, match="terminal.*failed"):
+        gateway.execute_tool(run_id, workspace, request, preapproved_by="reviewer")
 
-    assert result.status == ToolStatus.DENIED
-    assert result.approval_id == pending.approval_id
     assert not (workspace / "created.txt").exists()
     assert len(gateway.audit_store.list_approvals(run_id)) == 1
 

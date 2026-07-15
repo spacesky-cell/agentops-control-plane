@@ -35,6 +35,10 @@
   "patch_requires_approval": true,
   "unknown_command_requires_approval": true,
   "max_command_seconds": 30,
-  "max_output_chars": 8000
+  "max_output_chars": 8000,
+  "max_mcp_frame_bytes": 1048576,
+  "max_tool_argument_bytes": 262144,
+  "max_file_bytes": 1048576,
+  "max_source_bytes": 16777216
 }
 

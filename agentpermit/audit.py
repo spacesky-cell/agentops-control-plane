@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from .models import new_id, utc_now
 from .redaction import redact_durable, redact_text, redact_tool_payload
@@ -386,12 +387,21 @@ class AuditStore:
         message: str | None = None,
         payload: dict[str, Any] | None = None,
         decision: str | None = None,
+        payload_factory: Callable[[], dict[str, Any]] | None = None,
     ) -> bool:
         """Atomically claim a non-terminal run and append its sole terminal event."""
         if status not in {"success", "failed"}:
             raise ValueError("terminal run status must be 'success' or 'failed'")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None or str(row["status"]) in {"success", "failed"}:
+                conn.rollback()
+                return False
+            if payload_factory is not None:
+                payload = payload_factory()
             changed = self._finish_run_in_transaction(
                 conn,
                 run_id,
@@ -427,6 +437,14 @@ class AuditStore:
             return False
         conn.execute(
             """
+            UPDATE approvals
+            SET status = 'cancelled'
+            WHERE run_id = ? AND status IN ('pending', 'approved')
+            """,
+            (run_id,),
+        )
+        conn.execute(
+            """
             INSERT INTO events (
                 run_id, ts, type, tool_name, decision, risk, message, payload_json
             ) VALUES (?, ?, 'run_finished', NULL, ?, NULL, ?, ?)
@@ -440,6 +458,32 @@ class AuditStore:
             ),
         )
         return True
+
+    @contextmanager
+    def tool_execution(self, run_id: str) -> Iterator[sqlite3.Connection]:
+        """Hold the SQLite lifecycle claim through one governed tool attempt."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                conn.rollback()
+                raise ValueError(f"Run not found: {run_id}")
+            status = str(row["status"])
+            if status in {"success", "failed"}:
+                conn.rollback()
+                raise ValueError(f"Run is terminal with status {status}: {run_id}")
+            if status != "running":
+                conn.rollback()
+                raise ValueError(f"Run is not running: {run_id} ({status})")
+            try:
+                yield conn
+            except BaseException:
+                conn.rollback()
+                raise
+            else:
+                conn.commit()
 
     def pause_run(
         self,
@@ -498,31 +542,66 @@ class AuditStore:
         tool_name: str | None = None,
         decision: str | None = None,
         risk: str | None = None,
+        *,
+        _connection: sqlite3.Connection | None = None,
     ) -> int:
+        if _connection is not None:
+            return self._add_event(
+                _connection,
+                run_id,
+                event_type,
+                message,
+                payload,
+                tool_name,
+                decision,
+                risk,
+            )
         with self._connect() as conn:
-            cursor = conn.execute(
-                """
+            return self._add_event(
+                conn,
+                run_id,
+                event_type,
+                message,
+                payload,
+                tool_name,
+                decision,
+                risk,
+            )
+
+    def _add_event(
+        self,
+        conn: sqlite3.Connection,
+        run_id: str,
+        event_type: str,
+        message: str,
+        payload: dict[str, Any] | None,
+        tool_name: str | None,
+        decision: str | None,
+        risk: str | None,
+    ) -> int:
+        cursor = conn.execute(
+            """
                 INSERT INTO events (
                     run_id, ts, type, tool_name, decision, risk, message, payload_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    run_id,
-                    utc_now(),
-                    event_type,
-                    tool_name,
-                    decision,
-                    risk,
-                    redact_text(message),
-                    json.dumps(
-                        redact_tool_payload(tool_name, payload or {}),
-                        ensure_ascii=False,
-                    ),
+            (
+                run_id,
+                utc_now(),
+                event_type,
+                tool_name,
+                decision,
+                risk,
+                redact_text(message),
+                json.dumps(
+                    redact_tool_payload(tool_name, payload or {}),
+                    ensure_ascii=False,
                 ),
-            )
-            if cursor.lastrowid is None:
-                raise RuntimeError("SQLite did not return an event id")
-            return cursor.lastrowid
+            ),
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("SQLite did not return an event id")
+        return cursor.lastrowid
 
     def create_approval(
         self,
@@ -558,94 +637,117 @@ class AuditStore:
     ) -> ApprovalResolution:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            rejected = self._matching_approval(
-                conn, run_id, tool_name, request_fingerprint, "rejected"
+            resolution = self.resolve_approval_in_transaction(
+                conn,
+                run_id,
+                tool_name,
+                request_fingerprint,
+                payload,
+                policy_reason,
+                auto_approve=auto_approve,
             )
-            if rejected:
-                conn.commit()
-                return ApprovalResolution(
-                    int(rejected["id"]), "rejected", approver=rejected["approver"]
-                )
-
-            approved = self._matching_approval(
-                conn, run_id, tool_name, request_fingerprint, "approved"
-            )
-            pending = self._matching_approval(
-                conn, run_id, tool_name, request_fingerprint, "pending"
-            )
-            created = False
-            active = approved or pending
-            if active is None:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO approvals (
-                        run_id, tool_name, status, requested_at, request_fingerprint,
-                        policy_reason, payload_json
-                    ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
-                    """,
-                    (
-                        run_id,
-                        tool_name,
-                        utc_now(),
-                        request_fingerprint,
-                        redact_text(policy_reason),
-                        json.dumps(
-                            redact_tool_payload(tool_name, payload),
-                            ensure_ascii=False,
-                        ),
-                    ),
-                )
-                if cursor.lastrowid is None:
-                    raise RuntimeError("SQLite did not return an approval id")
-                approval_id = cursor.lastrowid
-                created = True
-                active_status = "pending"
-            else:
-                approval_id = int(active["id"])
-                active_status = str(active["status"])
-
-            if active_status == "approved":
-                cursor = conn.execute(
-                    "UPDATE approvals SET status = 'consumed' WHERE id = ? AND status = 'approved'",
-                    (approval_id,),
-                )
-                if cursor.rowcount == 1:
-                    approver = active["approver"] if active else None
-                    conn.commit()
-                    return ApprovalResolution(
-                        approval_id, "consumed", created, approver
-                    )
-
-            if auto_approve:
-                conn.execute(
-                    """
-                    UPDATE approvals
-                    SET status = 'approved', decided_at = ?, approver = ?, reviewer_reason = ?
-                    WHERE id = ? AND status IN ('pending', 'approved')
-                    """,
-                    (
-                        utc_now(),
-                        "auto-approve",
-                        "Trusted server-side auto approval.",
-                        approval_id,
-                    ),
-                )
-                cursor = conn.execute(
-                    "UPDATE approvals SET status = 'consumed' WHERE id = ? AND status = 'approved'",
-                    (approval_id,),
-                )
-                if cursor.rowcount != 1:
-                    conn.rollback()
-                    raise ApprovalStateConflictError(
-                        f"Approval {approval_id} could not be consumed atomically."
-                    )
-                conn.commit()
-                return ApprovalResolution(
-                    approval_id, "consumed", created, "auto-approve"
-                )
-
             conn.commit()
-            return ApprovalResolution(approval_id, "pending", created)
+            return resolution
+
+    def resolve_approval_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        run_id: str,
+        tool_name: str,
+        request_fingerprint: str,
+        payload: dict[str, Any],
+        policy_reason: str,
+        *,
+        auto_approve: bool = False,
+    ) -> ApprovalResolution:
+        run = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if run is None:
+            raise ValueError(f"Run not found: {run_id}")
+        run_status = str(run["status"])
+        if run_status in {"success", "failed"}:
+            raise ApprovalStateConflictError(
+                f"Cannot resolve approval for terminal run with status {run_status}: "
+                f"{run_id}"
+            )
+        rejected = self._matching_approval(
+            conn, run_id, tool_name, request_fingerprint, "rejected"
+        )
+        if rejected:
+            return ApprovalResolution(
+                int(rejected["id"]), "rejected", approver=rejected["approver"]
+            )
+
+        approved = self._matching_approval(
+            conn, run_id, tool_name, request_fingerprint, "approved"
+        )
+        pending = self._matching_approval(
+            conn, run_id, tool_name, request_fingerprint, "pending"
+        )
+        created = False
+        active = approved or pending
+        if active is None:
+            cursor = conn.execute(
+                """
+                INSERT INTO approvals (
+                    run_id, tool_name, status, requested_at, request_fingerprint,
+                    policy_reason, payload_json
+                ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    tool_name,
+                    utc_now(),
+                    request_fingerprint,
+                    redact_text(policy_reason),
+                    json.dumps(
+                        redact_tool_payload(tool_name, payload),
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return an approval id")
+            approval_id = cursor.lastrowid
+            created = True
+            active_status = "pending"
+        else:
+            approval_id = int(active["id"])
+            active_status = str(active["status"])
+
+        if active_status == "approved":
+            cursor = conn.execute(
+                "UPDATE approvals SET status = 'consumed' WHERE id = ? AND status = 'approved'",
+                (approval_id,),
+            )
+            if cursor.rowcount == 1:
+                approver = active["approver"] if active else None
+                return ApprovalResolution(approval_id, "consumed", created, approver)
+
+        if auto_approve:
+            conn.execute(
+                """
+                UPDATE approvals
+                SET status = 'approved', decided_at = ?, approver = ?, reviewer_reason = ?
+                WHERE id = ? AND status IN ('pending', 'approved')
+                """,
+                (
+                    utc_now(),
+                    "auto-approve",
+                    "Trusted server-side auto approval.",
+                    approval_id,
+                ),
+            )
+            cursor = conn.execute(
+                "UPDATE approvals SET status = 'consumed' WHERE id = ? AND status = 'approved'",
+                (approval_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ApprovalStateConflictError(
+                    f"Approval {approval_id} could not be consumed atomically."
+                )
+            return ApprovalResolution(approval_id, "consumed", created, "auto-approve")
+
+        return ApprovalResolution(approval_id, "pending", created)
 
     def _matching_approval(
         self,
@@ -683,6 +785,20 @@ class AuditStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             decided_at = utc_now()
+            owner = conn.execute(
+                """
+                SELECT approvals.status AS approval_status, runs.status AS run_status
+                FROM approvals
+                JOIN runs ON runs.id = approvals.run_id
+                WHERE approvals.id = ?
+                """,
+                (approval_id,),
+            ).fetchone()
+            if owner is not None and str(owner["run_status"]) in {"success", "failed"}:
+                raise ApprovalStateConflictError(
+                    f"Approval {approval_id} is not pending because its owning run is "
+                    f"terminal with status {owner['run_status']}."
+                )
             cursor = conn.execute(
                 """
                 UPDATE approvals

@@ -52,7 +52,7 @@ npx --no-install agentpermit --home .demo mcp `
   --task "检查仓库"
 ```
 
-第一次 `tools/call` 会创建受治理运行。被策略拦截的调用会返回稳定的待审批 id；在 Dashboard 或命令行批准后，重试完全相同的 MCP 调用。
+第一次 `tools/call` 会创建受治理运行。被策略拦截的调用会返回稳定的待审批 id；在 Dashboard 或执行 `npx --no-install agentpermit --home .demo approve <approval_id>` 批准后，重试完全相同的 MCP 调用。
 
 ## 标准 MCP 配置
 
@@ -116,6 +116,8 @@ Claude Code / Codex / MCP 客户端
 ## 安全边界
 
 AgentPermit 的 Dashboard 只绑定回环地址，面向本地单用户。复制的 workspace 是组织边界，不是容器或操作系统沙箱。同一用户的进程仍可篡改本地状态；允许执行的命令仍可按操作系统权限访问主机文件系统和网络。脱敏和 protected globs 只是纵深防御，不是 DLP。使用敏感仓库前请阅读 [SECURITY.md](SECURITY.md)。
+
+策略还会在处理前限制输入：`max_mcp_frame_bytes`（1,048,576）、`max_tool_argument_bytes`（262,144）、`max_file_bytes`（1,048,576）以及 `max_source_bytes`（复制源文件的聚合上限 16,777,216 字节）。所有值都必须是正整数。超限 MCP 帧和工具参数会返回结构化错误；文件读取、写入、patch、源目录复制和快照会直接失败，不会加载超限内容。
 
 ## 开发
 

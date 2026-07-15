@@ -2,6 +2,8 @@
 
 AgentPermit exposes a standard newline-delimited MCP JSON-RPC server. One transport owns at most one governed run, created lazily by its first `tools/call`.
 
+Each frame is bounded by the policy's `max_mcp_frame_bytes` before JSON parsing. Oversized frames return JSON-RPC error `-32001` with the configured and observed byte counts. `max_tool_argument_bytes` is enforced independently by the gateway and produces an MCP tool error with structured limit metadata.
+
 ## Client configuration
 
 Claude Code project configuration:

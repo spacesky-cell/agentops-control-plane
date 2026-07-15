@@ -52,7 +52,7 @@ npx --no-install agentpermit --home .demo mcp `
   --task "Inspect the repository"
 ```
 
-The first `tools/call` creates the governed run. A policy-gated call returns a stable pending approval id; approve it in the dashboard or with `npx --no-install agentpermit --home .demo approve`, then retry the identical MCP call.
+The first `tools/call` creates the governed run. A policy-gated call returns a stable pending approval id; approve it in the dashboard or with `npx --no-install agentpermit --home .demo approve <approval_id>`, then retry the identical MCP call.
 
 ## Standard MCP configuration
 
@@ -116,6 +116,8 @@ The gateway owns governance semantics. The MCP server and scripted agent are ada
 ## Security limits
 
 AgentPermit binds its dashboard to loopback and is intended for one local user. A copied workspace is an organizational boundary, not a container or OS sandbox. Same-user processes can tamper with local state; allowed commands can access the host filesystem and network according to OS permissions. Redaction and protected globs reduce accidental persistence but are defense in depth, not DLP. Review [SECURITY.md](SECURITY.md) before using it with sensitive repositories.
+
+The policy also bounds input before processing: `max_mcp_frame_bytes` (1,048,576), `max_tool_argument_bytes` (262,144), `max_file_bytes` (1,048,576), and `max_source_bytes` (16,777,216 aggregate copied source bytes). Every value must be a positive integer. Frames and tool arguments over their limits return structured errors; file reads, writes, patches, source copies, and snapshots fail instead of loading oversized content.
 
 ## Development
 
