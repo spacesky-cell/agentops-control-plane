@@ -90,3 +90,39 @@ git diff --check
 - Local Windows cannot exercise ten POSIX/symlink privilege tests; CI retains Linux coverage for those paths.
 - `actionlint` was not installed locally; YAML parsing succeeded with PyYAML, but hosted workflow execution remains the authoritative check.
 - No tag, publish, push, release, or version bump was performed. Task 8 must handle token migration and first-publication release-state changes.
+
+## Fix Review
+
+### RED Findings
+
+- `tests/test_release_validation.py` reproduced uncaught `KeyError` for a missing npm manifest and `AttributeError` for a non-object `package.json`.
+- `tests/test_workflows.py` initially rejected mutable action tags, direct GitHub expressions in `run` blocks, late source validation, and the extra `contents` permission on npm publication.
+- `tests/publish.test.mjs` initially failed because no registry-integrity reconciliation implementation existed.
+- `tests/version.test.js` initially failed because npm repository/homepage/bugs metadata was absent.
+
+### GREEN Fixes
+
+- `package.json` now declares the final public repository URL, homepage, and issues URL without changing version `0.2.0`.
+- All `run` blocks consume quoted environment variables; no `${{ ... }}` expression remains in shell source. A static test forbids regressions.
+- `publish-npm` has exactly `id-token: write`, retains protected environment `npm`, and uses the bootstrap `NPM_TOKEN` only as `NODE_AUTH_TOKEN`.
+- `scripts/publish_npm.mjs` computes local SHA-512 SRI, queries the exact registry version, skips only an exact integrity match, and fails on mismatches or non-404 lookup errors. Publication remains `--provenance --access public`.
+- GitHub Release creation uses explicit `GH_REPO`, creates only when absent, and always uploads all artifacts/checksums with `--clobber` for retry recovery.
+- Source tag/changelog validation runs immediately after dev installation; artifact validation runs again after build/package creation.
+- All official actions use reviewed immutable commits:
+  - `actions/checkout` `34e114876b0b11c390a56381ad16ebd13914f8d5` (`v4.3.1`)
+  - `actions/setup-python` `a26af69be951a213d495a4c3e4e4022e16d87065` (`v5.6.0`)
+  - `actions/setup-node` `49933ea5288caeca8642d1e84afbd3f7d6820020` (`v4.4.0`)
+  - `actions/upload-artifact` `ea165f8d65b6e75b540449e92b4886f43607fa02` (`v4.6.2`)
+  - `actions/download-artifact` `d3f86a106a0bac45b974a628896c90dbdf5c8093` (`v4.3.0`)
+- `validate_release.py` now converts missing, corrupt, and malformed npm/wheel/sdist inputs into `ReleaseValidationError` without tracebacks.
+- `smoke_npm_artifact.mjs` accepts either an explicit tarball argument or the workflow-provided `TARBALL` environment variable; a static test protects the no-argv workflow contract.
+- Actionlint v1.7.9 was installed with `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.9` and passed both workflows; PyYAML parsing and static workflow tests also pass.
+
+### Fix Verification
+
+- Full Python suite: **279 passed, 10 expected skips**.
+- Precision coverage: **90.01%** with `--cov-fail-under=90`.
+- npm suite: **16/16 passed**.
+- Ruff format/check and mypy: clean.
+- Python build, deterministic eval, npm pack dry-run, real v0.2.0 release validator, Windows-local `npx --no-install` MCP smoke, actionlint, YAML parse, and `git diff --check`: passed.
+- No tarballs, `dist`, build, eval, or coverage artifacts remain in the worktree.

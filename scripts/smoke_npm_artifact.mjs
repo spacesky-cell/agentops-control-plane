@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-const tarball = process.argv[2];
+const tarball = process.argv[2] ?? process.env.TARBALL;
 assert.ok(tarball, "usage: node scripts/smoke_npm_artifact.mjs <npm-tarball>");
 
 const root = mkdtempSync(path.join(os.tmpdir(), "agentpermit-npm-smoke-"));

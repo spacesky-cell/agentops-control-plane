@@ -20,6 +20,13 @@ def _write_npm_tgz(path: Path, version: str) -> None:
         archive.addfile(info, BytesIO(manifest))
 
 
+def _write_tgz_member(path: Path, name: str, content: bytes) -> None:
+    with tarfile.open(path, "w:gz") as archive:
+        info = tarfile.TarInfo(name)
+        info.size = len(content)
+        archive.addfile(info, BytesIO(content))
+
+
 def _write_wheel(path: Path, version: str, filename_version: str | None = None) -> None:
     metadata = (
         f"Metadata-Version: 2.1\nName: agentpermit\nVersion: {version}\n".encode()
@@ -82,3 +89,32 @@ def test_release_validator_rejects_mismatched_python_filename(tmp_path: Path) ->
     _write_wheel(wheel, "0.2.0", filename_version="0.2.1")
     with pytest.raises(ReleaseValidationError, match="wheel filename version"):
         validate_release(ROOT, "v0.2.0", wheel=wheel)
+
+
+def test_release_validator_normalizes_missing_npm_manifest(tmp_path: Path) -> None:
+    npm = tmp_path / "agentpermit-0.2.0.tgz"
+    _write_tgz_member(npm, "package/README.md", b"missing manifest")
+    with pytest.raises(ReleaseValidationError, match="missing package/package.json"):
+        validate_release(ROOT, "v0.2.0", npm_tgz=npm)
+
+
+def test_release_validator_normalizes_non_object_npm_manifest(tmp_path: Path) -> None:
+    npm = tmp_path / "agentpermit-0.2.0.tgz"
+    _write_tgz_member(npm, "package/package.json", b"[]")
+    with pytest.raises(ReleaseValidationError, match="must contain a JSON object"):
+        validate_release(ROOT, "v0.2.0", npm_tgz=npm)
+
+
+@pytest.mark.parametrize("kind", ["wheel", "sdist"])
+def test_release_validator_normalizes_corrupt_python_artifacts(
+    tmp_path: Path, kind: str
+) -> None:
+    if kind == "wheel":
+        artifact = tmp_path / "agentpermit-0.2.0-py3-none-any.whl"
+        keyword = {"wheel": artifact}
+    else:
+        artifact = tmp_path / "agentpermit-0.2.0.tar.gz"
+        keyword = {"sdist": artifact}
+    artifact.write_bytes(b"not an archive")
+    with pytest.raises(ReleaseValidationError, match=f"cannot read {kind}"):
+        validate_release(ROOT, "v0.2.0", **keyword)

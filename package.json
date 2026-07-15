@@ -3,6 +3,14 @@
   "version": "0.2.0",
   "description": "Vendor-neutral control plane for governed AI agent tool execution",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/spacesky-cell/agentpermit.git"
+  },
+  "homepage": "https://github.com/spacesky-cell/agentpermit#readme",
+  "bugs": {
+    "url": "https://github.com/spacesky-cell/agentpermit/issues"
+  },
   "engines": {
     "node": ">=18"
   },
@@ -16,6 +24,6 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test tests/launcher.test.js tests/version.test.js"
+    "test": "node --test tests/launcher.test.js tests/publish.test.mjs tests/version.test.js"
   }
 }

@@ -29,7 +29,13 @@ class ReleaseValidationError(ValueError):
 def _read_npm_version(path: Path) -> str:
     try:
         with tarfile.open(path, "r:gz") as archive:
-            member = archive.extractfile("package/package.json")
+            try:
+                member_info = archive.getmember("package/package.json")
+            except KeyError as exc:
+                raise ReleaseValidationError(
+                    "npm tarball is missing package/package.json"
+                ) from exc
+            member = archive.extractfile(member_info)
             if member is None:
                 raise ReleaseValidationError(
                     "npm tarball is missing package/package.json"
@@ -37,6 +43,8 @@ def _read_npm_version(path: Path) -> str:
             manifest = json.load(member)
     except (OSError, tarfile.TarError, json.JSONDecodeError) as exc:
         raise ReleaseValidationError(f"cannot read npm tarball {path}: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise ReleaseValidationError("npm package.json must contain a JSON object")
     version = manifest.get("version")
     if not isinstance(version, str):
         raise ReleaseValidationError("npm package.json has no string version")

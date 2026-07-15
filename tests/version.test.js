@@ -34,4 +34,12 @@ test("npm manifest has no dependencies or install hooks and ships only runtime s
     "README.md",
     "LICENSE",
   ]);
+  assert.deepEqual(packageJson.repository, {
+    type: "git",
+    url: "git+https://github.com/spacesky-cell/agentpermit.git",
+  });
+  assert.equal(packageJson.homepage, "https://github.com/spacesky-cell/agentpermit#readme");
+  assert.deepEqual(packageJson.bugs, {
+    url: "https://github.com/spacesky-cell/agentpermit/issues",
+  });
 });
