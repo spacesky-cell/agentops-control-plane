@@ -15,7 +15,7 @@ It is designed for a developer workstation. It is not a container, an operating-
 - Loopback-only HTML dashboard with reviewer, reason, and CSRF-protected approval forms.
 - A deterministic scripted agent kept for demos and evaluation tests; it is not the public integration path.
 
-![Completed AgentPermit run with created, modified, and deleted snapshot evidence](docs/assets/dashboard-completed-run.png)
+![Completed AgentPermit run with created, modified, and deleted snapshot evidence](https://raw.githubusercontent.com/spacesky-cell/agentpermit/main/docs/assets/dashboard-completed-run.png)
 
 ## Install
 
@@ -47,12 +47,12 @@ Open <http://127.0.0.1:8765>. The dashboard shows the completed run, policy trac
 For a real MCP session, start the server against a source directory and task:
 
 ```powershell
-agentpermit --home .demo mcp `
+npx --no-install agentpermit --home .demo mcp `
   --source examples\sample_repo `
   --task "Inspect the repository"
 ```
 
-The first `tools/call` creates the governed run. A policy-gated call returns a stable pending approval id; approve it in the dashboard or with `agentpermit approve`, then retry the identical MCP call.
+The first `tools/call` creates the governed run. A policy-gated call returns a stable pending approval id; approve it in the dashboard or with `npx --no-install agentpermit --home .demo approve`, then retry the identical MCP call.
 
 ## Standard MCP configuration
 
@@ -61,16 +61,18 @@ The public integration is the standard MCP stdio server. Use the exact command s
 Claude Code, project scope:
 
 ```powershell
-claude mcp add --scope project agentpermit -- agentpermit --home . mcp --source . --task "Govern this workspace"
+claude mcp add --scope project agentpermit -- npx --no-install agentpermit --home . mcp --source . --task "Govern this workspace"
 ```
 
-Codex, project-local config:
+Codex project configuration in `.codex/config.toml`:
 
-```powershell
-codex mcp add agentpermit -- agentpermit --home . mcp --source . --task "Govern this workspace"
+```toml
+[mcp_servers.agentpermit]
+command = "npx"
+args = ["--no-install", "agentpermit", "--home", ".", "mcp", "--source", ".", "--task", "Govern this workspace"]
 ```
 
-Use an absolute path to `agentpermit` when the client cannot resolve your npm bin directory. Keep `--auto-approve` out of client configuration; it is a server-process option for a deliberately trusted local demo only.
+Use an absolute path to the npm executable when the client cannot resolve `npx`. Keep `--auto-approve` out of client configuration; it is a server-process option for a deliberately trusted local demo only.
 
 The wire sequence is `initialize`, `notifications/initialized`, `tools/list`, then `tools/call`. See [docs/MCP_STDIO.md](docs/MCP_STDIO.md).
 
@@ -83,7 +85,15 @@ Policy decisions are made by the gateway before a tool executes. Writes and patc
 3. Event filters for policy, approval, and tool execution records.
 4. Snapshot counts and bounded diffs for created, modified, and deleted files.
 
-CLI alternatives are `agentpermit approvals`, `agentpermit approve <id> --approver <name> --reason <text>`, `agentpermit reject ...`, `agentpermit show <run_id>`, and `agentpermit export <run_id> --format html --out report.html`.
+CLI alternatives use the same `.demo` home as the run:
+
+```powershell
+npx --no-install agentpermit --home .demo approvals --run-id <run_id>
+npx --no-install agentpermit --home .demo approve <approval_id> --approver reviewer --reason "Reviewed exact request"
+npx --no-install agentpermit --home .demo reject <approval_id> --approver reviewer --reason "Rejected exact request"
+npx --no-install agentpermit --home .demo show <run_id>
+npx --no-install agentpermit --home .demo export <run_id> --format html --out report.html
+```
 
 ## Architecture
 

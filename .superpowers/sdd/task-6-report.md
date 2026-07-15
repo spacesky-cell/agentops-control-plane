@@ -65,3 +65,54 @@ No npm publish, PyPI publish, tag, version bump, global install, or real MCP cli
 - Pytest emitted an environment-level `pytest_asyncio` deprecation warning about an unset default fixture loop scope; the repository has no asynchronous tests affected by this documentation task.
 - The README screenshot is a repository asset and is not added to the deliberately runtime-only npm tarball manifest. The npm package README remains usable as text; the repository view contains the visual.
 - The documented install path uses a locally packed `0.2.0` tarball until the separate release task publishes npm. The docs explicitly avoid claiming publication.
+
+## Fix Review
+
+Review fixes were verified against a fresh packed artifact at `D:\AgentPermitReviewSmoke`.
+
+### Documentation corrections
+
+- Replaced bare post-install CLI invocations in both READMEs and `docs/MCP_STDIO.md` with `npx --no-install agentpermit`.
+- Claude Code project registration now launches the resolvable npx command.
+- Replaced the incorrectly labeled Codex CLI registration with an exact project `.codex/config.toml` `[mcp_servers.agentpermit]` entry using `command = "npx"` and an explicit argument array.
+- Approval, rejection, show, and export commands now carry the same `--home` as their run: `.demo` in the README workflow and `.` in the MCP project workflow.
+- Both READMEs now use the final repository raw screenshot URL while retaining `docs/assets/dashboard-completed-run.png` as the tracked source asset.
+- The private reporting contact link now targets the current `spacesky-cell/agentops-control-plane` repository and can redirect after the rename.
+- Removed premature `v0.3` wording from the architecture product boundary.
+
+### Fresh tarball workflow matrix
+
+The final `agentpermit-0.2.0.tgz` installed into a new npm project with zero vulnerabilities. The package remained the runtime-only 21-file allowlist; no version, allowlist, dependency, install hook, or publish state changed.
+
+- `npx --no-install agentpermit --help`: resolved the local npm binary and listed the complete CLI.
+- `init-policy --home .policy --out policy.json`: wrote `.policy/policy.json`; it correctly did not create runtime database state.
+- `run-script --home .demo --auto-approve`: run `run_71fe6814183f` completed with `success`.
+- `runs --home .demo`: listed the completed run.
+- `show --home .demo <run_id>`: returned the run and `run_finished` evidence.
+- `approvals --home .review --run-id <run_id>`: returned one pending approval for run `run_3e0a67e47090`.
+- `approve --home .review <approval_id>` followed by `resume-script --home .review`: resumed the same run to `success`; the approval status became `consumed`.
+- Separate `run-script --home .reject` created pending run `run_d9dc678ffbb9`; `reject --home .reject <approval_id>` changed its approval status to `rejected`.
+- `export --home .demo` produced an 8,103-byte HTML report and a 9,741-byte JSON report.
+- `eval --home .eval --tasks examples/tasks.jsonl --auto-approve`: one passed, zero failed.
+- `serve --home .demo --port 18765`: returned HTTP 200 with title `AgentPermit`; the listener was stopped afterward.
+- Standard MCP through `npx --no-install agentpermit --home . mcp --source .`: `initialize`, `notifications/initialized`, and `tools/list` returned protocol `2025-06-18` and five tools. The project-root `.agentpermit` and `node_modules` directories were excluded from source copying by protected globs.
+- Runtime databases were observed at `.demo/.agentpermit`, `.review/.agentpermit`, `.reject/.agentpermit`, `.eval/.agentpermit`, and project `./.agentpermit`, confirming documented home semantics.
+
+### Final verification
+
+- `python -m pytest -q`: **227 passed, 10 skipped** in 25.43s.
+- `npm test`: **13 passed, 0 failed**.
+- `python -m build`: wheel and sdist built successfully at version `0.2.0`.
+- `npm pack --dry-run --json`: succeeded with 21 files, 48,457 bytes packed, and 225,976 bytes unpacked.
+- Scoped stale-term scan: no portfolio, hiring, removed lifecycle, old package, or premature `v0.3` wording.
+- README parity scan: 9/9 public sections and 22/22 command/config lines.
+- Scoped case-sensitive invocation and home scan: no bare installed-package commands, mislabeled Codex CLI registration, or stateful commands missing `--home`.
+- Relative Markdown links: all targets resolved across 23 files.
+- Screenshot check: both READMEs contain the same final raw URL and the tracked PNG remains present.
+- `git diff --check`: run after this report and before commit.
+
+### Review verification notes
+
+Three PowerShell harness defects were isolated from product results: an argument-swallowing helper, a `$file:` interpolation parse error, and a case-insensitive scan that matched product-name prose. The final workflow commands were rerun literally without the helper, and the scans were narrowed and made case-sensitive. No AgentPermit workflow failed.
+
+Task 8 must verify the raw screenshot URL after the repository is renamed to `spacesky-cell/agentpermit`; the final-repository URL is intentionally not expected to resolve before that rename.

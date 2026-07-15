@@ -7,21 +7,23 @@ AgentPermit exposes a standard newline-delimited MCP JSON-RPC server. One transp
 Claude Code project configuration:
 
 ```powershell
-claude mcp add --scope project agentpermit -- agentpermit --home . mcp --source . --task "Govern this workspace"
+claude mcp add --scope project agentpermit -- npx --no-install agentpermit --home . mcp --source . --task "Govern this workspace"
 ```
 
-Codex project configuration:
+Codex project configuration in `.codex/config.toml`:
 
-```powershell
-codex mcp add agentpermit -- agentpermit --home . mcp --source . --task "Govern this workspace"
+```toml
+[mcp_servers.agentpermit]
+command = "npx"
+args = ["--no-install", "agentpermit", "--home", ".", "mcp", "--source", ".", "--task", "Govern this workspace"]
 ```
 
-Both clients treat every token after `--` as the MCP server command and arguments. Use an absolute executable path if the client's environment cannot resolve the npm bin directory.
+Claude treats every token after `--` as the MCP server command and arguments. Codex reads the command and argument array from the project configuration. Use an absolute npm executable path if the client environment cannot resolve `npx`.
 
 You can also run the server directly:
 
 ```powershell
-agentpermit --home . mcp --source . --task "Inspect the repository"
+npx --no-install agentpermit --home . mcp --source . --task "Inspect the repository"
 ```
 
 `--auto-approve` is available only as a deliberately trusted server-process option. Values supplied by the MCP client cannot enable it.
@@ -73,8 +75,8 @@ All tool schemas reject additional properties. File tools remain inside the copi
 When a tool requires review, the response includes a stable approval id. Review it at the loopback dashboard or with:
 
 ```powershell
-agentpermit --home . approvals --run-id <run_id>
-agentpermit --home . approve <approval_id> --approver reviewer --reason "Reviewed exact request"
+npx --no-install agentpermit --home . approvals --run-id <run_id>
+npx --no-install agentpermit --home . approve <approval_id> --approver reviewer --reason "Reviewed exact request"
 ```
 
 The MCP client must retry the same tool name and arguments. A different call cannot replace the pending request, and an approved record is consumed only once.

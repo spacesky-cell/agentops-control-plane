@@ -40,7 +40,7 @@ Every call then follows the same owner path:
 5. Record bounded result metadata and return an MCP content block.
 6. On clean EOF, finish a running run as success; preserve waiting approvals durably.
 
-Only standard MCP methods are public. There are no private run lifecycle or tool adapter methods.
+Only the standard MCP methods described in `MCP_STDIO.md` are public.
 
 ## Approval state machine
 
@@ -69,5 +69,4 @@ The dashboard binds only to loopback and reads the same SQLite source of truth a
 
 ## Supported product boundary
 
-AgentPermit v0.3 targets a local, single-user developer workflow. Multi-user authentication, remote deployment, container orchestration, PyPI publication, and organization-wide policy management are outside this release boundary.
-
+AgentPermit targets a local, single-user developer workflow. Multi-user authentication, remote deployment, container orchestration, PyPI publication, and organization-wide policy management are outside the current product boundary.
