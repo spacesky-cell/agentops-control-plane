@@ -1,30 +1,66 @@
 [project]
-name = "agentops-control-plane"
+name = "agentpermit"
 version = "0.2.0"
 description = "Vendor-neutral control plane for governed AI agent tool execution"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-authors = [{name = "AgentOps Control Plane"}]
+authors = [{name = "AgentPermit"}]
 dependencies = []
 
 [project.optional-dependencies]
 dev = [
     "build>=1.2.0",
+    "mypy>=1.13.0",
     "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
+    "PyYAML>=6.0.2",
+    "ruff>=0.8.0",
+    "tomli>=2.0.0; python_version < '3.11'",
 ]
 
 [project.scripts]
-agentops = "agentops_control_plane.cli:main"
+agentpermit = "agentpermit.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["agentops_control_plane"]
+packages = ["agentpermit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = ["-ra"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+
+[tool.coverage.run]
+source = ["agentpermit"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 2
+fail_under = 90
 

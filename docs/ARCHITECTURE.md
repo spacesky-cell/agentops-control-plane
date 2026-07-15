@@ -1,146 +1,76 @@
 # Architecture
 
-AgentOps Control Plane is intentionally a control layer, not a model provider
-or IDE clone. Its job is to receive proposed tool actions from agents, decide
-whether the action is safe, execute it in an isolated workspace, and keep a
-complete audit trail.
+AgentPermit is a local governance runtime, not an agent framework or model provider. Standard MCP is the public integration boundary. The gateway owns policy, approvals, execution, and audit truth; adapters only translate protocols or drive deterministic tests.
 
-## Components
+## Component boundaries
 
 ```text
-Scripted/OpenAI/Claude/LangGraph AgentAdapter
-        |
-        v
-RuntimeGateway
-        |
-        +--> PolicyEngine
-        |
-        +--> Approval Queue
-        |
-        +--> ToolExecutor
-        |       |
-        |       +--> Isolated Workspace
-        |
-        +--> AuditStore
-        |
-        +--> Snapshots / Reports / Dashboard
+MCP client                Scripted demo/eval adapter
+    |                                |
+    +---------- adapter layer -------+
+                     |
+              RuntimeGateway
+          /         |          \
+ PolicyEngine   AuditStore   WorkspaceManager
+                     |          |
+                 approvals   ToolExecutor
+                     \          /
+                  snapshots + dashboard
 ```
 
-## RuntimeGateway
+- `mcp_stdio.py` implements standard JSON-RPC/MCP session mechanics and maps tool calls to the gateway.
+- `gateway.py` is the single owner of run lifecycle, policy decisions, approval resolution, execution records, and snapshots.
+- `policy.py` evaluates deterministic structured requests.
+- `audit.py` owns durable SQLite state and atomic approval and run-lifecycle transitions.
+- `workspace.py` creates copied run workspaces, enforces protected paths, and produces snapshots.
+- `tools.py` implements the bounded file and command tools.
+- `web.py` renders the loopback-only operational dashboard from audit and snapshot truth.
+- `agents.py` is a deterministic demo/evaluation adapter, not a second public runtime.
 
-The gateway is the boundary that every tool call crosses. It records the
-requested action, asks the policy engine for a decision, handles approvals,
-executes approved actions, and stores the result.
+## Standard MCP lifecycle
 
-The important design choice is that agent code does not call tools directly.
-This makes the system portable across agent backends.
+Discovery does not create runtime state. The server validates `initialize`, accepts `notifications/initialized`, and answers `tools/list`, `resources/list`, and `prompts/list`. The first `tools/call` lazily creates one run and copied workspace for the session.
 
-Runtime data is rooted at the CLI home directory. By default this is the
-current working directory, and callers can pass `--home <path>` before the
-subcommand to choose a different project home.
+Every call then follows the same owner path:
 
-## AgentAdapter
+1. Validate the structured tool request.
+2. Evaluate policy and record the decision.
+3. Resolve a matching approval by fingerprint when required.
+4. Execute only after an allow or atomically consumed approval.
+5. Record bounded result metadata and return an MCP content block.
+6. On clean EOF, finish a running run as success; preserve waiting approvals durably.
 
-Agent backends implement the `AgentAdapter` protocol. An adapter owns the
-backend-specific planning loop, but every tool action still crosses the
-`RuntimeGateway`. `ScriptedAgent` is the deterministic adapter used for demos,
-tests, and resume-flow reference behavior.
+Only the standard MCP methods described in `MCP_STDIO.md` are public.
 
-`McpPlanAdapter` is a local MCP-style adapter skeleton. It reads a JSON plan of
-tool calls shaped as `{name, arguments}` entries and sends them through the
-same gateway. It is not a full MCP server implementation; it establishes the
-adapter-side contract that a real MCP transport can later feed. It also follows
-the same approval resume pattern as `ScriptedAgent`: the next pending tool call
-must match an approved request fingerprint before it can execute.
+## Approval state machine
 
-`serve-mcp-stdio` exposes a newline-delimited JSON-RPC transport with MCP
-`initialize`, `notifications/initialized`, `tools/list`, `tools/call`,
-`resources/list`, and `prompts/list` methods. It is useful for exercising the
-gateway through a process boundary while giving MCP-style clients the same
-governed tool surface and argument schemas as the local adapters. The transport
-also keeps `run.start`, `tool.call`, and `run.finish` compatibility methods for
-deterministic scripts that do not need the MCP session lifecycle.
+For a request requiring approval, the gateway checks the same request fingerprint in this order:
 
-## PolicyEngine
+1. Rejected match: deny the request.
+2. Approved match: atomically transition it to `consumed`; only the winner executes.
+3. Pending match: return the existing approval id.
+4. No active match: create one pending approval; concurrent inserts converge.
 
-The current policy engine is JSON-configured and deterministic. It supports:
+Auto-approval is a server execution mode that creates and consumes an auditable decision. MCP request parameters cannot enable it.
 
-- command allowlists
-- dangerous command deny patterns
-- shell control token denial before command execution
-- protected file patterns
-- approval requirements for writes and patches
-- max command runtime and output size
+Tool execution, approval consumption, and terminalization use the same SQLite write claim. If terminalization wins, later tool attempts and approval decisions reject and active approvals become `cancelled`. If a tool has already claimed the run, its approval transition, execution, and durable outcome finish before terminalization can take the final snapshot or write `run_finished`.
 
-This can later be extended with organization, repository, branch, user, or
-environment-aware policies.
+## Workspace and execution boundary
 
-## WorkspaceManager
+Each run receives a copied workspace under `<home>/.agentpermit/workspaces/<run_id>`. The source directory is not edited directly. Protected globs are excluded from copies, listings, snapshots, and file tools.
 
-Every run gets a copied workspace under `.agentops/workspaces/<run_id>`.
-Source repositories are never modified directly. The manager also creates
-before/after zip snapshots for audit and recovery.
+Commands are structured as `program` plus `args`, matched against exact argv prefixes, and launched with `shell=False`. AgentPermit uses a minimal environment, continuously drains bounded output, and terminates the process tree on timeout.
 
-## ToolExecutor
+`max_mcp_frame_bytes` bounds a newline-delimited MCP frame before JSON parsing, and `max_tool_argument_bytes` applies again at the gateway for non-MCP callers. `max_file_bytes` bounds each file read by copy, file tools, patches, and snapshots. `max_source_bytes` bounds the aggregate regular-file content copied into a new workspace. The defaults are 1,048,576, 262,144, 1,048,576, and 16,777,216 bytes respectively.
 
-The MVP toolset is deliberately small:
+This boundary is not OS isolation. Same-user processes can modify local files, and an allowed executable retains the host filesystem and network access granted by the operating system. Use a real container or sandbox when hostile-code isolation is required.
 
-- `list_files`
-- `read_file`
-- `write_file`
-- `patch_text`
-- `run_command`
+## Evidence and dashboard
 
-This is enough to demonstrate code-agent workflows while keeping risk and
-testability under control.
+SQLite stores runs, events, decisions, approvals, and snapshot references. Durable event payloads are recursively redacted; file contents and command logs are summarized or bounded. Before/after snapshots drive created, modified, and deleted evidence in the dashboard.
 
-Commands are parsed into argv and executed with `shell=False`. The policy layer
-rejects shell control tokens such as `&&`, `|`, redirection, and newlines before
-the executor runs the command.
+The dashboard binds only to loopback and reads the same SQLite source of truth as the CLI. State-changing approval forms require a per-process CSRF token, reviewer, and reason. Large or binary changes are reported as metadata instead of being rendered inline.
 
-## AuditStore
+## Supported product boundary
 
-The audit store is SQLite-backed and captures:
-
-- runs
-- policy decisions
-- approval requests and decisions
-- agent steps
-- tool execution results
-- snapshot paths
-- schema version metadata
-
-This creates the evidence trail needed for debugging, compliance, and evals.
-Read-file and command-output payloads are summarized before they are written to
-the audit database. The tool result returned to the caller remains complete.
-
-## Approval Flow
-
-When a policy requires approval:
-
-1. The run pauses with status `waiting_for_approval`.
-2. A pending approval row is created.
-3. A reviewer approves or rejects it.
-4. `resume-script` matches the approval to the pending request fingerprint.
-5. The approval is marked `consumed` when the pre-approved action is executed.
-6. The run continues from the pending step.
-
-The resume flow is implemented for the scripted agent adapter and serves as the
-reference pattern for other agent backends.
-
-## What This Is Not
-
-This is not trying to be a stronger container sandbox than Docker, E2B, Modal,
-Daytona, or OpenAI's sandbox integrations. It is the governance layer above
-those execution environments: policy, approval, trace, replay, and reporting.
-
-## Next Production Steps
-
-- Add Docker and cloud sandbox backends.
-- Add richer MCP resource and prompt providers.
-- Add OpenAI Agents SDK adapter.
-- Add Claude Code/Codex CLI adapter.
-- Add OpenTelemetry export.
-- Add multi-run evaluation dashboards.
-- Add richer diff rendering and branch/PR integrations.
-
+AgentPermit targets a local, single-user developer workflow. Multi-user authentication, remote deployment, container orchestration, PyPI publication, and organization-wide policy management are outside the current product boundary.

@@ -1,186 +1,84 @@
-# MCP Stdio Transport
+# Standard MCP stdio
 
-`serve-mcp-stdio` exposes AgentOps Control Plane through newline-delimited
-JSON-RPC over stdin/stdout. It is intended for local MCP-style clients that
-need governed tool execution, audit logs, approval gates, and isolated
-workspaces without embedding AgentOps Python APIs directly.
+AgentPermit exposes a standard newline-delimited MCP JSON-RPC server. One transport owns at most one governed run, created lazily by its first `tools/call`.
 
-## Start The Server
+Each frame is bounded by the policy's `max_mcp_frame_bytes` before JSON parsing. Oversized frames return JSON-RPC error `-32001` with the configured and observed byte counts. `max_tool_argument_bytes` is enforced independently by the gateway and produces an MCP tool error with structured limit metadata.
 
-```powershell
-python -m agentops_control_plane serve-mcp-stdio
-```
+## Client configuration
 
-Use the global `--home` option before the subcommand to choose where runtime
-data is stored:
+Claude Code project configuration:
 
 ```powershell
-python -m agentops_control_plane --home .demo serve-mcp-stdio
+claude mcp add --scope project agentpermit -- npx --no-install agentpermit --home . mcp --source . --task "Govern this workspace"
 ```
 
-The server reads one JSON object per line from stdin and writes one JSON-RPC
-response per line to stdout. Notifications do not produce responses.
+Codex project configuration in `.codex/config.toml`:
 
-## MCP Session Order
-
-MCP clients should use this order:
-
-1. Send `initialize`.
-2. Send `notifications/initialized`.
-3. Call `tools/list`, `resources/list`, `prompts/list`, or `tools/call`.
-
-`ping` is available before initialization. Standard MCP methods other than
-`initialize`, `ping`, and notifications require the initialized session state.
-
-## Initialize
-
-Request:
-
-```json
-{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-06-18"}}
+```toml
+[mcp_servers.agentpermit]
+command = "npx"
+args = ["--no-install", "agentpermit", "--home", ".", "mcp", "--source", ".", "--task", "Govern this workspace"]
 ```
 
-Response shape:
+Claude treats every token after `--` as the MCP server command and arguments. Codex reads the command and argument array from the project configuration. Use an absolute npm executable path if the client environment cannot resolve `npx`.
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "init",
-  "result": {
-    "protocolVersion": "2025-06-18",
-    "capabilities": {
-      "tools": {"listChanged": false},
-      "resources": {"listChanged": false},
-      "prompts": {"listChanged": false}
-    },
-    "serverInfo": {
-      "name": "agentops-control-plane",
-      "version": "0.1.0"
-    }
-  }
-}
+You can also run the server directly:
+
+```powershell
+npx --no-install agentpermit --home . mcp --source . --task "Inspect the repository"
 ```
 
-The server currently supports protocol version `2025-06-18`. If a client asks
-for a different version, the response falls back to `2025-06-18`.
+`--auto-approve` is available only as a deliberately trusted server-process option. Values supplied by the MCP client cannot enable it.
 
-Send the initialized notification after receiving the initialize response:
+## Lifecycle
+
+1. Client sends `initialize`.
+2. Client sends `notifications/initialized`.
+3. Client may call `tools/list`, `resources/list`, and `prompts/list`.
+4. The first `tools/call` starts the governed run and copied workspace; later calls reuse it.
+5. A pending approval blocks any different request. Retrying the identical request after review atomically consumes the approval and executes once.
+6. Clean EOF finishes an active run as `success`; a waiting run remains `waiting_for_approval`. Transport failure marks a started active run as failed.
+
+Only the standard MCP methods described here are available.
+
+## Example exchange
+
+Requests are one JSON object per line:
 
 ```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"README.md"}}}
 ```
 
-## Supported Methods
+The initialize response reports server name/version and the selected supported protocol version. Notification lines do not receive a response.
 
-| Method | Requires initialized MCP session | Response |
-| --- | --- | --- |
-| `initialize` | No | Protocol version, capabilities, server info |
-| `notifications/initialized` | No | Notification, no response |
-| `notifications/...` | No | Unknown notifications are ignored |
-| `ping` | No | `{}` |
-| `tools/list` | Yes | Tool definitions with `inputSchema` |
-| `tools/call` | Yes | MCP content blocks with `isError` |
-| `resources/list` | Yes | `{"resources": []}` |
-| `prompts/list` | Yes | `{"prompts": []}` |
-| `run.start` | No | Local compatibility run lifecycle |
-| `tool.call` | No | Local compatibility tool-call shape |
-| `run.finish` | No | Local compatibility run lifecycle |
-
-The local `run.start`, `tool.call`, and `run.finish` methods are retained for
-deterministic scripts and tests that use the same process boundary without the
-MCP session lifecycle. New MCP clients should prefer `tools/list` and
-`tools/call`.
-
-## Tools
-
-`tools/list` returns the current governed tool surface:
-
-- `list_files`
-- `read_file`
-- `write_file`
-- `patch_text`
-- `run_command`
-
-Each tool definition includes an `inputSchema`. `tools/call` validates
-`arguments` against the same schema before sending the request to the gateway:
-
-- required fields must be present
-- unknown fields are rejected when `additionalProperties` is `false`
-- declared string fields must be strings
-- unknown tool names are rejected before policy evaluation
-
-Validation errors are returned as MCP tool results with `isError: true`, not as
-transport-level JSON-RPC internal errors.
-
-## Tool Call Example
-
-One manual JSON-lines session can look like this:
-
-```jsonl
-{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-06-18"}}
-{"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":"start","method":"run.start","params":{"task":"MCP stdio read","agent_name":"mcp-client","source":"examples/sample_repo"}}
-{"jsonrpc":"2.0","id":"read","method":"tools/call","params":{"name":"read_file","arguments":{"path":"math_utils.py"}}}
-```
-
-`run.start` creates the governed workspace:
+Tool results use MCP content blocks:
 
 ```json
-{"jsonrpc":"2.0","id":"start","method":"run.start","params":{"task":"MCP stdio read","agent_name":"mcp-client","source":"examples/sample_repo"}}
+{"content":[{"type":"text","text":"..."}],"isError":false}
 ```
 
-Then call a standard MCP tool after initialization:
+Policy denials, pending approvals, validation errors, and tool failures set `isError: true` while preserving JSON-RPC transport success. Invalid JSON, invalid requests, unknown methods, and invalid parameters use the corresponding JSON-RPC error codes.
 
-```json
-{"jsonrpc":"2.0","id":"read","method":"tools/call","params":{"name":"read_file","arguments":{"path":"math_utils.py"}}}
+## Exposed tools
+
+- `list_files`: optional workspace-relative glob.
+- `read_file`: UTF-8 workspace-relative path.
+- `write_file`: UTF-8 path and content.
+- `patch_text`: path, exact old text, and replacement text.
+- `run_command`: exact `program` string plus `args` string array.
+
+All tool schemas reject additional properties. File tools remain inside the copied workspace and protected globs are inaccessible. `run_command` does not accept a shell string.
+
+## Approval retry
+
+When a tool requires review, the response includes a stable approval id. Review it at the loopback dashboard or with:
+
+```powershell
+npx --no-install agentpermit --home . approvals --run-id <run_id>
+npx --no-install agentpermit --home . approve <approval_id> --approver reviewer --reason "Reviewed exact request"
 ```
 
-Successful `tools/call` responses use MCP content blocks:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "read",
-  "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "def add(a, b):\n    return a - b\n\n"
-      }
-    ],
-    "isError": false
-  }
-}
-```
-
-Policy denials, approval requirements, tool failures, and argument validation
-errors are also returned as `tools/call` results, but with `isError: true`.
-
-## JSON-RPC Validation
-
-The transport validates the request envelope before method dispatch:
-
-- the request must be a JSON object
-- `jsonrpc` must be `"2.0"`
-- request methods that expect a response must include a string or integer `id`
-- `params`, when present, must be an object
-- notifications must use the `notifications/` method namespace
-
-Invalid request envelopes return JSON-RPC error code `-32600`. Malformed JSON
-returns `-32700`. Unknown request methods return `-32601`.
-
-MCP methods that require the initialized session state return `-32002` when
-called too early.
-
-## Approval Semantics
-
-`tools/call` still crosses the normal `RuntimeGateway` boundary:
-
-```text
-MCP client -> stdio transport -> RuntimeGateway -> PolicyEngine -> ToolExecutor
-```
-
-Write and patch operations can pause with `pending_approval` unless the run is
-executed through a path that supplies auto-approval. Approval rows, policy
-decisions, tool results, and snapshots are recorded in the same SQLite audit
-store used by the CLI and dashboard.
+The MCP client must retry the same tool name and arguments. A different call cannot replace the pending request, and an approved record is consumed only once.

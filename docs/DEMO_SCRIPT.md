@@ -1,52 +1,48 @@
-# Demo Script
+# Deterministic demo and evaluation
 
-Use this flow in interviews or portfolio recordings.
+The scripted agent is a repeatable demo/evaluation tool. Standard MCP is the supported public integration.
 
-## 1. Show The Source Bug
+## Automatic local demo
 
-```powershell
-Get-Content examples\sample_repo\math_utils.py
-python -m unittest -q
-```
-
-Run the unittest command from `examples\sample_repo` to show the failure.
-
-## 2. Run With Automatic Approval
+From the repository root:
 
 ```powershell
-python -m agentops_control_plane run-script `
+python -m agentpermit --home .demo run-script `
   --plan examples\scripted_fix_agent.json `
   --source examples\sample_repo `
-  --task "Fix sample CI failure" `
+  --task "Fix sample test failure" `
   --auto-approve
+python -m agentpermit --home .demo runs
+python -m agentpermit --home .demo serve --port 8765
 ```
 
-Explain that the source directory is copied into an isolated workspace and the
-original file is left unchanged.
+Open <http://127.0.0.1:8765>. The run modifies only its copied workspace and records the auto-approved patch, command result, and snapshot evidence.
 
-## 3. Run With Human Approval
+## Human approval demo
 
 ```powershell
-python -m agentops_control_plane run-script `
+python -m agentpermit --home .demo run-script `
   --plan examples\scripted_fix_agent.json `
   --source examples\sample_repo `
   --task "Approval gate demo"
-
-python -m agentops_control_plane approvals --run-id <run_id>
-python -m agentops_control_plane approve <approval_id> --approver reviewer
-python -m agentops_control_plane resume-script <run_id> `
+python -m agentpermit --home .demo approvals --run-id <run_id>
+python -m agentpermit --home .demo approve <approval_id> `
+  --approver reviewer `
+  --reason "Patch reviewed"
+python -m agentpermit --home .demo resume-script <run_id> `
   --plan examples\scripted_fix_agent.json `
   --approver reviewer
 ```
 
-Point out that `patch_text` pauses because patch operations require approval.
+The patch pauses once, the approved request is consumed once, and the deterministic plan resumes from that step.
 
-## 4. Export Evidence
+## Export and evaluation
 
 ```powershell
-python -m agentops_control_plane export <run_id> --format html --out report.html
-python -m agentops_control_plane serve --port 8765
+python -m agentpermit --home .demo export <run_id> --format html --out report.html
+python -m agentpermit --home .demo export <run_id> --format json --out report.json
+python -m agentpermit --home .demo eval --tasks examples\tasks.jsonl --auto-approve
 ```
 
-Open the dashboard at `http://127.0.0.1:8765`.
+The demo runs local code with the current user's OS permissions. The copied workspace is not a security sandbox; see [../SECURITY.md](../SECURITY.md).
 

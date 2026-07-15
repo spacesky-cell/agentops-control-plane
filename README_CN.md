@@ -1,181 +1,146 @@
-# AgentOps Control Plane 中文文档
+# AgentPermit
 
-[English README](README.md)
+AgentPermit 是一个运行在本机、面向单用户的 AI Agent 工具治理网关。它位于标准 MCP 客户端与 Agent 想要访问的文件或命令之间，提供策略判断、人工审批、有界执行、快照和可审计 Dashboard。
 
-AgentOps Control Plane 是一个面向 AI Agent 的轻量级运行治理层。它不试图替代 Codex、Claude Code、LangGraph 或 OpenAI Agents SDK，而是位于这些 Agent 后端之上，统一管理工具执行、权限策略、人工审批、审计日志、隔离工作区、快照和运行报告。
+它面向开发者工作站，不是容器、操作系统沙箱、多用户服务或托管控制平面。
 
-## 为什么需要它
+## 功能
 
-很多 Agent Demo 展示的是“LLM 调用工具”。但真正进入生产环境时，企业更关心的是：
+- 为 Claude Code、Codex 及兼容客户端提供标准 MCP stdio 集成。
+- 每次运行复制独立 workspace，不直接修改源代码目录。
+- 结构化文件和命令工具，支持 argv 前缀策略和有界输出。
+- 带稳定请求指纹、原子状态更新和一次性消费的审批记录。
+- SQLite 持久化运行、决策、审批、工具结果和快照证据。
+- Dashboard 展示创建、修改、删除、二进制和超大文件的前后快照差异。
+- 仅监听回环地址的 HTML Dashboard，审批表单带审核人、理由和 CSRF 防护。
+- 保留确定性的 scripted agent 用于演示和评测；公开集成路径是标准 MCP。
 
-- Agent 可以执行哪些命令？
-- Agent 可以读写哪些文件？
-- 哪些动作必须经过人工审批？
-- Agent 具体做了什么，能不能追踪和回放？
-- 出问题后能不能审计、复盘、导出证据？
-- 多个 Agent 后端能不能共用一套治理规则？
+![AgentPermit 已完成运行，展示创建、修改和删除文件的快照证据](https://raw.githubusercontent.com/spacesky-cell/agentpermit/main/docs/assets/dashboard-completed-run.png)
 
-这个项目就是围绕这些问题做的作品级 MVP。
+## 安装
 
-## 核心能力
-
-- 每次运行都会创建隔离 workspace，不直接修改原始项目目录。
-- 策略引擎可控制文件读取、文件写入、文本 patch 和 shell 命令。
-- 写入和 patch 默认需要人工审批，也支持 demo 场景下自动批准。
-- SQLite 审计库记录 run、事件、策略决策、工具调用和审批记录。
-- 每次运行前后都会生成 workspace 快照。
-- 内置 scripted agent adapter，方便做确定性 demo 和测试。
-- 支持 HTML / JSON 运行报告导出。
-- 提供本地 Web Dashboard 浏览 run 和 trace。
-- 运行时只依赖 Python 标准库，测试环境需要 pytest。
-
-## 快速开始
+AgentPermit 目前处于公开采用准备阶段，尚未发布到 npm。可以在仓库目录构建并安装准确的 npm 产物：
 
 ```powershell
-git clone https://github.com/spacesky-cell/agentops-control-plane.git
-cd agentops-control-plane
-python -m agentops_control_plane run-script `
+npm pack
+npm install --ignore-scripts .\agentpermit-0.2.0.tgz
+npx --no-install agentpermit --help
+```
+
+启动器需要 Node.js 18+ 和 Python 3.10+。在发布任务完成前，包版本保持 `0.2.0`。
+
+## 三分钟快速开始
+
+在仓库目录通过已安装的 npm 启动器运行确定性示例：
+
+```powershell
+npx --no-install agentpermit --home .demo run-script `
   --plan examples\scripted_fix_agent.json `
   --source examples\sample_repo `
   --auto-approve
+npx --no-install agentpermit --home .demo runs
+npx --no-install agentpermit --home .demo serve --port 8765
 ```
 
-列出运行记录：
+打开 <http://127.0.0.1:8765>，即可查看运行状态、策略轨迹、审批决定和快照证据。原始 `examples\sample_repo` 不会被修改。
+
+使用标准 MCP：
 
 ```powershell
-python -m agentops_control_plane runs
-```
-
-查看某次运行的完整 trace：
-
-```powershell
-python -m agentops_control_plane show <run_id>
-```
-
-## 人工审批与恢复
-
-不使用 `--auto-approve` 时，`patch_text` 这类中风险操作会暂停并进入审批队列：
-
-```powershell
-python -m agentops_control_plane run-script `
-  --plan examples\scripted_fix_agent.json `
+npx --no-install agentpermit --home .demo mcp `
   --source examples\sample_repo `
-  --task "Approval gate demo"
+  --task "检查仓库"
 ```
 
-查看审批项：
+第一次 `tools/call` 会创建受治理运行。被策略拦截的调用会返回稳定的待审批 id；在 Dashboard 或执行 `npx --no-install agentpermit --home .demo approve <approval_id>` 批准后，重试完全相同的 MCP 调用。
+
+## 标准 MCP 配置
+
+公开集成方式是标准 MCP stdio。请使用客户端实际支持的命令格式。
+
+Claude Code（项目级）：
 
 ```powershell
-python -m agentops_control_plane approvals --run-id <run_id>
+claude mcp add --scope project agentpermit -- npx --no-install agentpermit --home . mcp --source . --task "治理此工作区"
 ```
 
-批准后继续运行：
+Codex 项目级 `.codex/config.toml` 配置：
+
+```toml
+[mcp_servers.agentpermit]
+command = "npx"
+args = ["--no-install", "agentpermit", "--home", ".", "mcp", "--source", ".", "--task", "治理此工作区"]
+```
+
+如果客户端找不到 `npx`，可以改用 npm 可执行文件的绝对路径。不要把 `--auto-approve` 放进客户端配置；它只适用于明确可信的本地演示服务进程。
+
+协议顺序为 `initialize`、`notifications/initialized`、`tools/list`、`tools/call`。详见 [docs/MCP_STDIO.md](docs/MCP_STDIO.md)。
+
+## 审批与 Dashboard
+
+网关在工具执行前做策略判断。默认情况下写入和 patch 需要审批。`http://127.0.0.1:8765` Dashboard 提供：
+
+1. 运行状态和任务元数据。
+2. 审批请求、经过脱敏的参数、审核人和理由。
+3. 策略、审批、工具执行事件筛选。
+4. 创建、修改、删除文件的快照计数和有界差异。
+
+命令行等价操作必须使用与运行相同的 `.demo` home：
 
 ```powershell
-python -m agentops_control_plane approve <approval_id> --approver reviewer
-python -m agentops_control_plane resume-script <run_id> `
-  --plan examples\scripted_fix_agent.json `
-  --approver reviewer
+npx --no-install agentpermit --home .demo approvals --run-id <run_id>
+npx --no-install agentpermit --home .demo approve <approval_id> --approver reviewer --reason "已审核准确请求"
+npx --no-install agentpermit --home .demo reject <approval_id> --approver reviewer --reason "已拒绝准确请求"
+npx --no-install agentpermit --home .demo show <run_id>
+npx --no-install agentpermit --home .demo export <run_id> --format html --out report.html
 ```
 
-## 导出报告
-
-导出 HTML 报告：
-
-```powershell
-python -m agentops_control_plane export <run_id> --format html --out report.html
-```
-
-导出 JSON 审计数据：
-
-```powershell
-python -m agentops_control_plane export <run_id> --format json --out report.json
-```
-
-启动本地 Dashboard：
-
-```powershell
-python -m agentops_control_plane serve --port 8765
-```
-
-浏览器打开：
+## 架构
 
 ```text
-http://127.0.0.1:8765
+Claude Code / Codex / MCP 客户端
+              |
+          标准 MCP stdio
+              v
+          RuntimeGateway
+        /      |       \
+     Policy  Approval  AuditStore
+       |        |          |
+   ToolExecutor ---- WorkspaceManager
+              |
+         快照 + Dashboard
 ```
 
-## Demo 场景
+网关拥有治理语义；MCP 服务和 scripted agent 只是适配器。边界和生命周期见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-示例 Agent 会修复 `examples/sample_repo/math_utils.py` 中的一个 bug：
+## 安全边界
 
-```python
-def add(a, b):
-    return a - b
-```
+AgentPermit 的 Dashboard 只绑定回环地址，面向本地单用户。复制的 workspace 是组织边界，不是容器或操作系统沙箱。同一用户的进程仍可篡改本地状态；允许执行的命令仍可按操作系统权限访问主机文件系统和网络。脱敏和 protected globs 只是纵深防御，不是 DLP。使用敏感仓库前请阅读 [SECURITY.md](SECURITY.md)。
 
-Agent 会在隔离 workspace 中将其修复为：
+策略还会在处理前限制输入：`max_mcp_frame_bytes`（1,048,576）、`max_tool_argument_bytes`（262,144）、`max_file_bytes`（1,048,576）以及 `max_source_bytes`（复制源文件的聚合上限 16,777,216 字节）。所有值都必须是正整数。超限 MCP 帧和工具参数会返回结构化错误；文件读取、写入、patch、源目录复制和快照会直接失败，不会加载超限内容。
 
-```python
-def add(a, b):
-    return a + b
-```
-
-原始 `examples/sample_repo` 不会被修改。你可以通过 `.agentops/workspaces/<run_id>` 查看 Agent 实际修改后的隔离工作区。
-
-## 公开仓库内容说明
-
-这个仓库面向公开展示，刻意保留了源码、文档、示例和 `tests/` 测试源码。`tests/` 不是测试运行产物，它的作用是让招聘方或 reviewer 能验证项目质量。
-
-不会提交运行生成物和本地隐私文件。`.agentops/`、`.pytest_cache/`、`__pycache__/`、导出的 demo 报告、本地环境文件和日志都已经写入 `.gitignore`。
-
-## 项目结构
-
-```text
-Agent backend -> Gateway -> Policy -> Tools -> Isolated workspace
-                          -> Audit store
-                          -> Approval queue
-                          -> Snapshots/reports
-```
-
-主要模块：
-
-- `agentops_control_plane/gateway.py`：所有工具调用的统一入口。
-- `agentops_control_plane/policy.py`：策略判断和风险分级。
-- `agentops_control_plane/tools.py`：受控工具执行器。
-- `agentops_control_plane/workspace.py`：隔离 workspace 和快照管理。
-- `agentops_control_plane/audit.py`：SQLite 审计存储。
-- `agentops_control_plane/agents.py`：deterministic scripted agent adapter。
-- `agentops_control_plane/web.py`：本地 Dashboard。
-- `agentops_control_plane/evaluator.py`：批量 eval 入口。
-
-## 测试
+## 开发
 
 ```powershell
-python -m pytest -q
+python -m pip install -e ".[dev]"
+ruff format --check agentpermit tests scripts
+ruff check agentpermit tests scripts
+mypy --no-incremental agentpermit
+python -m pytest --cov=agentpermit --cov-report=term-missing --cov-fail-under=90
+python -m build
+npm test
+npm pack --dry-run
+python -m agentpermit --home .eval eval --tasks examples/tasks.jsonl --auto-approve
+python scripts/validate_release.py --tag v0.2.0
+git diff --check
 ```
 
-端到端 eval：
+变更、测试和漏洞披露流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。项目使用 MIT 许可证，详见 [LICENSE](LICENSE)。
 
-```powershell
-python -m agentops_control_plane eval --tasks examples\tasks.jsonl --auto-approve
-```
+## 文档
 
-## 求职简历描述
-
-可以这样写：
-
-> Built a vendor-neutral AgentOps control plane for AI agents with isolated workspaces, policy-based tool execution, approval gates, command/file audit logs, snapshots, trace export, and deterministic evaluation demos.
-
-中文表达：
-
-> 实现了一个面向 AI Agent 的运行治理平台，支持隔离工作区、策略化工具执行、人工审批、命令/文件审计日志、运行快照、trace 导出和确定性评测 demo。
-
-## 后续可扩展方向
-
-- 接入 OpenAI Agents SDK。
-- 接入 Claude Code / Codex CLI。
-- 增加 MCP tool adapter。
-- 增加 Docker、E2B、Modal、Daytona 等 sandbox backend。
-- 增加 OpenTelemetry / Phoenix trace export。
-- 增加多 Agent 后端对比评测。
-- 增加 GitHub PR / CI 修复工作流。
+- [架构](docs/ARCHITECTURE.md)
+- [标准 MCP stdio](docs/MCP_STDIO.md)
+- [确定性演示](docs/DEMO_SCRIPT.md)
+- [安全政策](SECURITY.md)
+- [贡献指南](CONTRIBUTING.md)

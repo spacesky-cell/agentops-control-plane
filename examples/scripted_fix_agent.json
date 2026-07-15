@@ -19,7 +19,7 @@
     },
     {
       "tool": "run_command",
-      "args": {"command": "python -m unittest -q"}
+      "args": {"program": "python", "args": ["-m", "unittest", "-q"]}
     }
   ]
 }
