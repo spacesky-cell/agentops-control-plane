@@ -9,7 +9,7 @@ import zipfile
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Callable, Iterator
+from typing import Any, BinaryIO, Callable, Iterator
 
 from .config import PolicyConfig, ResourceLimitError, is_protected_path
 
@@ -20,6 +20,7 @@ _WIN_FILE_SHARE_WRITE = 0x2
 _WIN_OPEN_EXISTING = 3
 _WIN_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _WIN_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+_ctypes_windows: Any = ctypes
 
 
 class WorkspaceIntegrityError(ValueError):
@@ -988,7 +989,7 @@ class WorkspaceManager:
         parts = tuple(part for part in candidate.parts if part != ".")
         if not parts or any(part == ".." for part in parts):
             raise ValueError(f"Path escapes workspace: {relative}")
-        if os.name == "nt" and any(":" in part for part in parts):
+        if any(":" in part for part in parts):
             raise ValueError(f"Path component contains colon: {relative}")
         return parts
 
@@ -1032,7 +1033,7 @@ class WorkspaceManager:
 
     @staticmethod
     def _win_open_directory(path: Path) -> int:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _ctypes_windows.WinDLL("kernel32", use_last_error=True)
         create_file = kernel32.CreateFileW
         create_file.argtypes = [
             ctypes.c_wchar_p,
@@ -1055,7 +1056,7 @@ class WorkspaceManager:
         )
         invalid = ctypes.c_void_p(-1).value
         if handle == invalid:
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise _ctypes_windows.WinError(_ctypes_windows.get_last_error())
         return int(handle)
 
     @staticmethod
@@ -1078,15 +1079,15 @@ class WorkspaceManager:
             ]
 
         info = _FileInfo()
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _ctypes_windows.WinDLL("kernel32", use_last_error=True)
         if not kernel32.GetFileInformationByHandle(
             ctypes.c_void_p(handle), ctypes.byref(info)
         ):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise _ctypes_windows.WinError(_ctypes_windows.get_last_error())
         return info.volume, (info.index_high << 32) | info.index_low
 
     @staticmethod
     def _win_close_handle(handle: int) -> None:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _ctypes_windows.WinDLL("kernel32", use_last_error=True)
         if not kernel32.CloseHandle(ctypes.c_void_p(handle)):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise _ctypes_windows.WinError(_ctypes_windows.get_last_error())

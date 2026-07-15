@@ -232,3 +232,93 @@ Results: **328 passed, 10 skipped, 90.01% coverage**; npm **16 passed**;
 Ruff format/check and mypy clean; workflow tests **6 passed**; workflow YAML,
 actionlint, and diff checks exited zero. The existing ten platform skips and
 pytest-asyncio loop-scope warning remain unchanged.
+
+## CI Fix
+
+### Hosted RED Evidence
+
+GitHub Actions run `29392747696` reported two Linux-specific failure groups:
+
+- `mypy` produced **26 `attr-defined` errors** for Windows-only APIs exposed by
+  Linux typeshed: `ctypes.WinDLL`, `ctypes.WinError`,
+  `ctypes.get_last_error`, `subprocess.CREATE_NEW_PROCESS_GROUP`, and
+  `msvcrt.get_osfhandle`.
+- Linux pytest produced **7 failures** covering cross-platform colon path
+  semantics, earlier fail-closed source identity detection, the stronger
+  workspace-root integrity message during POSIX cleanup, and the intentionally
+  fd-backed POSIX `HOME` value.
+
+The typing RED was reproduced locally with:
+
+```text
+python -m mypy --no-incremental --platform linux agentpermit
+```
+
+Result before the fix: **26 errors in 2 files** (`workspace.py` and `tools.py`),
+matching the hosted job.
+
+### Corrections
+
+- Module-local `Any` aliases now isolate only the Windows ctypes/subprocess/
+  msvcrt API boundaries. Runtime `os.name` branches and the global strict mypy
+  configuration are unchanged.
+- `_relative_parts` rejects a colon in any component on every OS. The existing
+  ADS/stream regression was renamed to state its cross-platform contract and
+  continues to cover protected and ordinary filenames.
+- The source ancestor replacement test accepts only the earlier
+  `WorkspaceIntegrityError` fail-closed path or the leased successful copy, and
+  always proves that replacement secret content was not copied.
+- The nested POSIX creation cleanup test asserts the common
+  `changed during access` integrity invariant, preserving both moved-root and
+  replacement-root cleanup assertions.
+- The minimal-environment subprocess test proves `HOME` resolves to and is the
+  same file as the command cwd. Windows retains the literal workspace-path
+  assertion; POSIX retains the intentional `/proc/self/fd` or `/dev/fd` lease
+  path. Credential non-inheritance assertions are unchanged.
+
+### Local GREEN Evidence
+
+```text
+python -m mypy --no-incremental --platform linux agentpermit
+python -m mypy --no-incremental agentpermit
+```
+
+Both commands report **Success: no issues found in 17 source files**.
+
+Focused locally runnable checks:
+
+```text
+python -m pytest tests/test_approval_security.py -q -k "colon_components or source_copy_holds_ancestor_lease or nested_create_removes" -rs
+python -m pytest tests/test_command_execution.py::test_run_command_uses_minimal_environment_without_credentials -q
+```
+
+Result: **6 passed, 1 POSIX-only skipped, 51 deselected**. The skipped nested
+descriptor cleanup and Linux-specific source replacement ordering are left to
+the hosted Linux rerun, as required; their assertions were checked against the
+current owner code paths without using WSL or Docker.
+
+Full local verification:
+
+```text
+python -m pytest --cov=agentpermit --cov-report=term-missing --cov-fail-under=90 -q
+npm test
+python -m ruff format --check agentpermit tests scripts
+python -m ruff check agentpermit tests scripts
+python -m mypy --no-incremental --platform linux agentpermit
+python -m mypy --no-incremental agentpermit
+python -m pytest tests/test_workflows.py -q
+python -c "import yaml; [yaml.safe_load(open(p, encoding='utf-8')) for p in ['.github/workflows/ci.yml','.github/workflows/release.yml']]"
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.9
+git diff --check
+```
+
+Results: **328 passed, 10 skipped, 90.02% coverage**; npm **16 passed**;
+Ruff format/check clean; both mypy platforms clean; workflow tests **6 passed**;
+workflow YAML and actionlint exited zero. The final diff check is rerun after
+this report update and before commit.
+
+### Remaining CI Concern
+
+Hosted Linux is still the authoritative execution evidence for the two
+POSIX-only filesystem race/cleanup assertions. No push or workflow rerun was
+performed in this fix wave.

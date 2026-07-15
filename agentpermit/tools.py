@@ -18,6 +18,9 @@ from .models import structured_command_argv
 from .workspace import WorkspaceManager
 
 
+_ctypes_windows: Any = ctypes
+_subprocess_windows: Any = subprocess
+
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "list_files",
@@ -190,7 +193,8 @@ class ToolExecutor:
             if os.name == "nt":
                 job = _WindowsJob()
                 popen_kwargs["creationflags"] = (
-                    subprocess.CREATE_NEW_PROCESS_GROUP | _WINDOWS_CREATE_SUSPENDED
+                    _subprocess_windows.CREATE_NEW_PROCESS_GROUP
+                    | _WINDOWS_CREATE_SUSPENDED
                 )
             else:
                 popen_kwargs["start_new_session"] = True
@@ -575,8 +579,9 @@ class _OwnedReadFd:
     def _windows_available(self, fd: int) -> int | None:
         import msvcrt
 
+        msvcrt_windows: Any = msvcrt
         available = ctypes.c_uint32()
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _ctypes_windows.WinDLL("kernel32", use_last_error=True)
         kernel32.PeekNamedPipe.argtypes = [
             ctypes.c_void_p,
             ctypes.c_void_p,
@@ -587,7 +592,7 @@ class _OwnedReadFd:
         ]
         kernel32.PeekNamedPipe.restype = ctypes.c_int
         if kernel32.PeekNamedPipe(
-            ctypes.c_void_p(msvcrt.get_osfhandle(fd)),
+            ctypes.c_void_p(msvcrt_windows.get_osfhandle(fd)),
             None,
             0,
             None,
@@ -595,10 +600,10 @@ class _OwnedReadFd:
             None,
         ):
             return available.value or None
-        error = ctypes.get_last_error()
+        error = _ctypes_windows.get_last_error()
         if error in {109, 232}:
             return 0
-        raise ctypes.WinError(error)
+        raise _ctypes_windows.WinError(error)
 
 
 _WINDOWS_CREATE_SUSPENDED = 0x00000004
@@ -650,12 +655,12 @@ class _WindowsJob:
     def __init__(self) -> None:
         if os.name != "nt":
             raise OSError("Windows Job Objects are unavailable on this platform.")
-        self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        self._ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+        self._kernel32 = _ctypes_windows.WinDLL("kernel32", use_last_error=True)
+        self._ntdll = _ctypes_windows.WinDLL("ntdll", use_last_error=True)
         self._configure_functions()
         self.handle = self._kernel32.CreateJobObjectW(None, None)
         if not self.handle:
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise _ctypes_windows.WinError(_ctypes_windows.get_last_error())
         self.assigned = False
         try:
             limits = _WindowsExtendedLimitInformation()
@@ -666,7 +671,7 @@ class _WindowsJob:
                 ctypes.byref(limits),
                 ctypes.sizeof(limits),
             ):
-                raise ctypes.WinError(ctypes.get_last_error())
+                raise _ctypes_windows.WinError(_ctypes_windows.get_last_error())
         except BaseException:
             self.close()
             raise
@@ -714,10 +719,10 @@ class _WindowsJob:
             process.pid,
         )
         if not process_handle:
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise _ctypes_windows.WinError(_ctypes_windows.get_last_error())
         try:
             if not self._kernel32.AssignProcessToJobObject(self.handle, process_handle):
-                raise ctypes.WinError(ctypes.get_last_error())
+                raise _ctypes_windows.WinError(_ctypes_windows.get_last_error())
             self.assigned = True
             status = self._ntdll.NtResumeProcess(process_handle)
             if status < 0:
@@ -729,7 +734,7 @@ class _WindowsJob:
 
     def terminate(self) -> None:
         if self.handle and not self._kernel32.TerminateJobObject(self.handle, 1):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise _ctypes_windows.WinError(_ctypes_windows.get_last_error())
 
     def close(self) -> None:
         handle = getattr(self, "handle", None)

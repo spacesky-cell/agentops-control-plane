@@ -84,14 +84,26 @@ def test_run_command_uses_minimal_environment_without_credentials(
     result = run_python(
         executor,
         workspace,
-        "import json,os; print(json.dumps(dict(os.environ), sort_keys=True))",
+        "import json,os,pathlib; "
+        "home=os.environ['HOME']; cwd=os.getcwd(); "
+        "print(json.dumps({'environment': dict(os.environ), "
+        "'home_samefile': os.path.samefile(home, cwd), "
+        "'home_resolved': str(pathlib.Path(home).resolve()), "
+        "'cwd_resolved': str(pathlib.Path(cwd).resolve())}, sort_keys=True))",
     )
-    environment = json.loads(result["output"])
+    payload = json.loads(result["output"])
+    environment = payload["environment"]
 
     assert "AGENTPERMIT_TEST_TOKEN" not in environment
     assert "AWS_SECRET_ACCESS_KEY" not in environment
-    assert environment["HOME"] == str(workspace)
-    assert environment["USERPROFILE"] == str(workspace)
+    assert payload["home_samefile"] is True
+    assert payload["home_resolved"] == payload["cwd_resolved"]
+    if os.name == "nt":
+        assert environment["HOME"] == str(workspace)
+        assert environment["USERPROFILE"] == str(workspace)
+    else:
+        assert environment["HOME"].startswith(("/proc/self/fd/", "/dev/fd/"))
+        assert environment["USERPROFILE"] == environment["HOME"]
     assert "PATH" in environment
 
 

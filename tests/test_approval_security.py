@@ -589,7 +589,7 @@ def test_workspace_create_rejects_existing_workspace(tmp_path):
     "relative",
     [".env::$DATA", "id_rsa::$DATA", ".npmrc::$DATA", "ordinary.txt:stream"],
 )
-def test_workspace_rejects_windows_stream_syntax_before_access(tmp_path, relative):
+def test_workspace_rejects_colon_components_on_every_platform(tmp_path, relative):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     _run_id, workspace = gateway.start_run("stream syntax", "test-agent")
     for name in (".env", "id_rsa", ".npmrc", "ordinary.txt"):
@@ -722,13 +722,19 @@ def test_source_copy_holds_ancestor_lease_during_file_open(tmp_path, monkeypatch
 
     monkeypatch.setattr(manager, "is_protected", try_replace_ancestor)
 
-    workspace = manager.create("run_source_ancestor", source)
+    workspace = manager.workspaces_dir / "run_source_ancestor"
+    try:
+        workspace = manager.create("run_source_ancestor", source)
+    except workspace_module.WorkspaceIntegrityError as exc:
+        assert "changed" in str(exc)
 
     assert rename_blocked is (os.name == "nt")
-    assert (workspace / "nested" / "app.py").read_text(encoding="utf-8") == "ordinary"
-    assert "ancestor-secret" not in (workspace / "nested" / "app.py").read_text(
+    copied = workspace / "nested" / "app.py"
+    assert not copied.exists() or "ancestor-secret" not in copied.read_text(
         encoding="utf-8"
     )
+    if copied.exists():
+        assert copied.read_text(encoding="utf-8") == "ordinary"
 
 
 @pytest.mark.parametrize(
@@ -1063,7 +1069,7 @@ def test_nested_create_removes_directory_created_after_root_rename(
 
     monkeypatch.setattr(workspace_module.os, "mkdir", swap_root_before_mkdir)
 
-    with pytest.raises(ValueError, match="Directory changed during access"):
+    with pytest.raises(ValueError, match="changed during access"):
         manager.write_text(workspace, "nested/new.txt", "must-not-remain")
 
     assert swapped
