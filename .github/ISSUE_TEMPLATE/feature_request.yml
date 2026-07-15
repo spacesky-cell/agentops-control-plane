@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a focused improvement within AgentPermit's product boundary
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the workflow or risk, not only a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: State observable acceptance criteria.
+    validations:
+      required: true
+  - type: dropdown
+    id: owner
+    attributes:
+      label: Proposed owner layer
+      options: [MCP adapter, Runtime gateway, Policy engine, Approval store, Tool executor, Workspace and snapshots, Dashboard, CLI and packaging, Documentation, Unsure]
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and compatibility impact
+      description: Cover permissions, local state, protocol changes, migration, and sensitive data.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Product boundary
+      options:
+        - label: I understand AgentPermit is currently local, loopback-only, and single-user.
+          required: true
