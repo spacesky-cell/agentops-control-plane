@@ -27,8 +27,13 @@ def _write_tgz_member(path: Path, name: str, content: bytes) -> None:
         archive.addfile(info, BytesIO(content))
 
 
-def _write_wheel(path: Path, version: str, filename_version: str | None = None) -> None:
-    metadata = (
+def _write_wheel(
+    path: Path,
+    version: str,
+    filename_version: str | None = None,
+    metadata: bytes | None = None,
+) -> None:
+    metadata = metadata or (
         f"Metadata-Version: 2.1\nName: agentpermit\nVersion: {version}\n".encode()
     )
     name = filename_version or version
@@ -36,8 +41,13 @@ def _write_wheel(path: Path, version: str, filename_version: str | None = None) 
         archive.writestr(f"agentpermit-{name}.dist-info/METADATA", metadata)
 
 
-def _write_sdist(path: Path, version: str, filename_version: str | None = None) -> None:
-    metadata = (
+def _write_sdist(
+    path: Path,
+    version: str,
+    filename_version: str | None = None,
+    metadata: bytes | None = None,
+) -> None:
+    metadata = metadata or (
         f"Metadata-Version: 2.1\nName: agentpermit\nVersion: {version}\n".encode()
     )
     name = filename_version or version
@@ -103,6 +113,30 @@ def test_release_validator_normalizes_non_object_npm_manifest(tmp_path: Path) ->
     _write_tgz_member(npm, "package/package.json", b"[]")
     with pytest.raises(ReleaseValidationError, match="must contain a JSON object"):
         validate_release(ROOT, "v0.2.0", npm_tgz=npm)
+
+
+def test_release_validator_normalizes_invalid_utf8_npm_json(tmp_path: Path) -> None:
+    npm = tmp_path / "agentpermit-0.2.0.tgz"
+    _write_tgz_member(npm, "package/package.json", b"{\xff")
+    with pytest.raises(ReleaseValidationError, match="cannot read npm tarball"):
+        validate_release(ROOT, "v0.2.0", npm_tgz=npm)
+
+
+@pytest.mark.parametrize("kind", ["wheel", "sdist"])
+def test_release_validator_normalizes_invalid_utf8_python_metadata(
+    tmp_path: Path, kind: str
+) -> None:
+    metadata = b"Metadata-Version: 2.1\nVersion: \xff\n"
+    if kind == "wheel":
+        artifact = tmp_path / "agentpermit-0.2.0-py3-none-any.whl"
+        _write_wheel(artifact, "0.2.0", metadata=metadata)
+        keyword = {"wheel": artifact}
+    else:
+        artifact = tmp_path / "agentpermit-0.2.0.tar.gz"
+        _write_sdist(artifact, "0.2.0", metadata=metadata)
+        keyword = {"sdist": artifact}
+    with pytest.raises(ReleaseValidationError, match="invalid UTF-8"):
+        validate_release(ROOT, "v0.2.0", **keyword)
 
 
 @pytest.mark.parametrize("kind", ["wheel", "sdist"])

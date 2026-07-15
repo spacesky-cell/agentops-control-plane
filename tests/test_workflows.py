@@ -79,11 +79,38 @@ def test_release_validation_and_publication_boundaries() -> None:
     assert any("publish_npm.mjs" in step.get("run", "") for step in publish["steps"])
 
     release = jobs["github-release"]
+    assert publish["if"] == "github.repository == 'spacesky-cell/agentpermit'"
+    assert release["if"] == "github.repository == 'spacesky-cell/agentpermit'"
     assert release["env"]["GH_REPO"] == "${{ github.repository }}"
     release_commands = "\n".join(step.get("run", "") for step in release["steps"])
     assert "gh release view" in release_commands
     assert "gh release upload" in release_commands
     assert "--clobber" in release_commands
+
+
+def test_validate_build_checks_repository_before_expensive_steps() -> None:
+    workflow = _load(ROOT / ".github" / "workflows" / "release.yml")
+    job = workflow["jobs"]["validate-build"]
+    assert job["env"]["EXPECTED_REPOSITORY"] == "spacesky-cell/agentpermit"
+    assert job["env"]["ACTUAL_REPOSITORY"] == "${{ github.repository }}"
+    steps = job["steps"]
+    repository_index = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("name") == "Validate release repository"
+    )
+    install_index = next(
+        i for i, step in enumerate(steps) if "pip install" in step.get("run", "")
+    )
+    expensive_index = next(
+        i
+        for i, step in enumerate(steps)
+        if any(
+            command in step.get("run", "")
+            for command in ("ruff ", "pytest", "python -m build")
+        )
+    )
+    assert repository_index < install_index < expensive_index
 
 
 def test_smoke_workflows_use_tarball_environment_fallback() -> None:

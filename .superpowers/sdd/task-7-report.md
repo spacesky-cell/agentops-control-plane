@@ -21,7 +21,7 @@
 - Fresh tarball install and MCP smoke: `clean npm artifact MCP smoke passed` using `npx --no-install` from the installed package.
 - Release validator against real v0.2.0 source, npm tgz, wheel, and sdist: all versions `0.2.0`.
 - Validator mismatch tests cover malformed tags, source metadata, npm metadata/filename, wheel filename, and artifact agreement failures.
-- Workflow YAML parsed successfully with PyYAML. `actionlint` was unavailable in the local environment.
+- Workflow YAML parsed successfully with PyYAML. The initial binary lookup was unavailable, then the reproducible `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.9` check passed.
 - `git diff --check`: no whitespace errors.
 
 ## Coverage Table
@@ -88,7 +88,7 @@ git diff --check
 ## Remaining Concerns
 
 - Local Windows cannot exercise ten POSIX/symlink privilege tests; CI retains Linux coverage for those paths.
-- `actionlint` was not installed locally; YAML parsing succeeded with PyYAML, but hosted workflow execution remains the authoritative check.
+- Hosted workflow execution remains the authoritative check; local actionlint was verified reproducibly with `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.9`.
 - No tag, publish, push, release, or version bump was performed. Task 8 must handle token migration and first-publication release-state changes.
 
 ## Fix Review
@@ -116,11 +116,13 @@ git diff --check
   - `actions/download-artifact` `d3f86a106a0bac45b974a628896c90dbdf5c8093` (`v4.3.0`)
 - `validate_release.py` now converts missing, corrupt, and malformed npm/wheel/sdist inputs into `ReleaseValidationError` without tracebacks.
 - `smoke_npm_artifact.mjs` accepts either an explicit tarball argument or the workflow-provided `TARBALL` environment variable; a static test protects the no-argv workflow contract.
-- Actionlint v1.7.9 was installed with `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.9` and passed both workflows; PyYAML parsing and static workflow tests also pass.
+- Actionlint v1.7.9 passed both workflows via the reproducible command `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.9`; PyYAML parsing and static workflow tests also pass.
+- Release publication and GitHub Release jobs are guarded by the final repository identity; validate-build fails before installation if the actual repository differs.
+- Invalid UTF-8 in npm JSON and wheel/sdist metadata is covered and normalized to `ReleaseValidationError`.
 
 ### Fix Verification
 
-- Full Python suite: **279 passed, 10 expected skips**.
+- Full Python suite: **283 passed, 10 expected skips**.
 - Precision coverage: **90.01%** with `--cov-fail-under=90`.
 - npm suite: **16/16 passed**.
 - Ruff format/check and mypy: clean.

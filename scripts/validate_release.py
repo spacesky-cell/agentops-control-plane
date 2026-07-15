@@ -41,7 +41,7 @@ def _read_npm_version(path: Path) -> str:
                     "npm tarball is missing package/package.json"
                 )
             manifest = json.load(member)
-    except (OSError, tarfile.TarError, json.JSONDecodeError) as exc:
+    except (OSError, tarfile.TarError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ReleaseValidationError(f"cannot read npm tarball {path}: {exc}") from exc
     if not isinstance(manifest, dict):
         raise ReleaseValidationError("npm package.json must contain a JSON object")
@@ -55,7 +55,12 @@ def _metadata_version(data: bytes, source: Path) -> str:
     match = re.search(rb"^Version:\s*([^\r\n]+)", data, re.MULTILINE)
     if not match:
         raise ReleaseValidationError(f"{source} is missing a Version metadata field")
-    return match.group(1).decode("utf-8").strip()
+    try:
+        return match.group(1).decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise ReleaseValidationError(
+            f"{source} contains invalid UTF-8 metadata"
+        ) from exc
 
 
 def _read_wheel_version(path: Path) -> str:
