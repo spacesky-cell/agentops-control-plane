@@ -93,13 +93,12 @@ jobs:
           path: release-tools
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20
+          node-version: "24"
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - shell: bash
         run: echo "TARBALL=$(find release-artifacts -maxdepth 1 -name 'agentpermit-*.tgz' -print -quit)" >> "$GITHUB_ENV"
       - run: node release-tools/publish_npm.mjs "$TARBALL"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   github-release:
     name: Create or update GitHub Release

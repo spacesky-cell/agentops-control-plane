@@ -88,6 +88,30 @@ def test_release_validation_and_publication_boundaries() -> None:
     assert "--clobber" in release_commands
 
 
+def test_npm_publish_uses_oidc_without_long_lived_token() -> None:
+    workflow = _load(ROOT / ".github" / "workflows" / "release.yml")
+    publish = workflow["jobs"]["publish-npm"]
+
+    assert publish["permissions"] == {"id-token": "write"}
+    setup_node = next(
+        step
+        for step in publish["steps"]
+        if step.get("uses", "").startswith("actions/setup-node@")
+    )
+    assert setup_node["with"]["node-version"] == "24"
+    assert setup_node["with"]["package-manager-cache"] is False
+
+    publish_step = next(
+        step for step in publish["steps"] if "publish_npm.mjs" in step.get("run", "")
+    )
+    assert "env" not in publish_step
+    workflow_text = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "NODE_AUTH_TOKEN" not in workflow_text
+    assert "NPM_TOKEN" not in workflow_text
+
+
 def test_validate_build_checks_repository_before_expensive_steps() -> None:
     workflow = _load(ROOT / ".github" / "workflows" / "release.yml")
     job = workflow["jobs"]["validate-build"]
