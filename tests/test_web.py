@@ -330,6 +330,26 @@ def test_snapshot_diff_renders_newline_only_changes_as_human_readable(tmp_path, 
     assert "newline" in entry.diff.lower()
 
 
+@pytest.mark.parametrize(
+    ("before_files", "after_files", "expected_status"),
+    [({}, {"empty.txt": b""}, "created"), ({"empty.txt": b""}, {}, "deleted")],
+)
+def test_snapshot_diff_handles_created_and_deleted_empty_files(
+    tmp_path, before_files, after_files, expected_status
+):
+    before = write_snapshot(tmp_path / "before.zip", before_files)
+    after = write_snapshot(tmp_path / "after.zip", after_files)
+
+    result = compare_snapshot_archives(before, after)
+
+    entry = result.entries[0]
+    assert entry.status == expected_status
+    assert entry.display == "text"
+    assert entry.diff
+    assert "empty.txt" in entry.diff
+    assert "empty" in entry.diff.lower()
+
+
 def test_dashboard_server_bounds_threads_and_request_timeouts(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     server = DashboardHTTPServer(("127.0.0.1", 0), Dashboard(store).app())

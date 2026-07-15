@@ -177,7 +177,9 @@ def _make_entry(
     return DiffEntry(path, status, "text", before_size, after_size, "\n".join(rendered))
 
 
-def _newline_style(content: bytes) -> str:
+def _newline_style(content: bytes | None) -> str:
+    if content is None:
+        return "not present"
     has_crlf = b"\r\n" in content
     normalized = content.replace(b"\r\n", b"")
     has_lf = b"\n" in normalized

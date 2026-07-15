@@ -49,3 +49,16 @@ The dashboard remains a local single-user interface. The copied workspace backen
 - `git diff --check`: passed (only Git line-ending normalization warnings).
 
 The fixes validate Host and Origin against the concrete loopback bind authority, resolve hostnames once before binding, return 404 for unknown approvals before form validation, scope submitted values to the matching approval row, render newline-only snapshot changes as explicit metadata, and use a bounded timeout-protected dashboard server.
+
+### Re-review Empty Snapshot Fix
+
+#### RED
+
+- `python -m pytest tests/test_web.py -q`: `2 failed, 36 passed`; both new public `compare_snapshot_archives` regressions raised `TypeError` in `_newline_style` for `None` (created empty file and deleted empty file).
+
+#### GREEN
+
+- `python -m pytest tests/test_web.py -q`: `38 passed`.
+- `python -m pytest -q`: `227 passed, 10 skipped`.
+- `python -m ruff check agentpermit tests`: `All checks passed!`.
+- `git diff --check`: passed (only Git line-ending normalization warnings).
