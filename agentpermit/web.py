@@ -6,10 +6,13 @@ import ipaddress
 import json
 import secrets
 import socket
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socket import socket as Socket
+from socketserver import ThreadingMixIn
+from threading import BoundedSemaphore, Thread
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 from .audit import ApprovalNotFoundError, ApprovalStateConflictError, AuditStore
 from .snapshot_diff import SnapshotDiff, compare_snapshot_archives
@@ -55,6 +58,93 @@ def validate_loopback_host(host: str) -> None:
         )
 
 
+def _format_authority(host: str, port: int) -> str:
+    normalized = host.strip().lower().strip("[]")
+    if ":" in normalized:
+        return f"[{normalized}]:{port}"
+    return f"{normalized}:{port}"
+
+
+def _normalize_authority(value: str) -> str | None:
+    candidate = value.strip().lower()
+    if not candidate or any(character.isspace() for character in candidate):
+        return None
+    try:
+        parsed = urlsplit(f"//{candidate}")
+        if parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+            return None
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if host is None or port is None:
+        return None
+    return _format_authority(host, port)
+
+
+def _resolve_loopback_bind(host: str) -> tuple[int, str, set[str]]:
+    if not host:
+        raise ValueError("Dashboard host must resolve only to loopback addresses: <empty>")
+    try:
+        addresses = socket.getaddrinfo(
+            host,
+            0,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+    except socket.gaierror as exc:
+        raise ValueError(f"Dashboard host must resolve only to loopback addresses: {host}") from exc
+    resolved: list[tuple[int, str]] = []
+    for family, _, _, _, sockaddr in addresses:
+        address = sockaddr[0].split("%", 1)[0]
+        try:
+            if not ipaddress.ip_address(address).is_loopback:
+                raise ValueError(
+                    f"Dashboard host must resolve only to loopback addresses: {host}"
+                )
+            resolved.append((family, address))
+        except ValueError:
+            raise ValueError(
+                f"Dashboard host must resolve only to loopback addresses: {host}"
+            )
+    if resolved:
+        family, address = resolved[0]
+        return family, address, {host, address}
+    raise ValueError(f"Dashboard host must resolve only to loopback addresses: {host}")
+
+
+class DashboardHTTPServer(ThreadingMixIn, HTTPServer):
+    """Bounded, timeout-protected standard-library dashboard server."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 16
+    max_workers = 16
+    request_timeout = 10.0
+
+    def __init__(self, server_address: tuple[object, ...], handler_class: type[BaseHTTPRequestHandler]):
+        self._worker_slots = BoundedSemaphore(self.max_workers)
+        super().__init__(server_address, handler_class)
+
+    def process_request(self, request: Socket, client_address: object) -> None:
+        if not self._worker_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+
+        def run() -> None:
+            try:
+                self.process_request_thread(request, client_address)
+            finally:
+                self._worker_slots.release()
+
+        thread = Thread(target=run, daemon=self.daemon_threads)
+        thread.start()
+
+
+class _IPv6DashboardHTTPServer(DashboardHTTPServer):
+    address_family = socket.AF_INET6
+
+
 class Dashboard:
     def __init__(self, store: AuditStore, *, csrf_token: str | None = None) -> None:
         self.store = store
@@ -65,7 +155,15 @@ class Dashboard:
         csrf_token = self.csrf_token
 
         class Handler(BaseHTTPRequestHandler):
+            def setup(self) -> None:
+                super().setup()
+                timeout = getattr(self.server, "request_timeout", 10.0)
+                self.connection.settimeout(timeout)
+
             def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
+                if not self._request_authority_is_valid():
+                    self._send_status(403, "Invalid request authority")
+                    return
                 parsed = urlparse(self.path)
                 parts = [part for part in parsed.path.split("/") if part]
                 if parsed.path == "/":
@@ -123,6 +221,9 @@ class Dashboard:
                 ):
                     self._send_status(404, "Resource not found")
                     return
+                if not self._request_authority_is_valid():
+                    self._send_status(403, "Invalid request authority")
+                    return
                 form = self._read_form()
                 if form is None:
                     return
@@ -133,6 +234,9 @@ class Dashboard:
                 try:
                     approval_id = int(parts[1])
                 except ValueError:
+                    self._send_status(404, "Approval not found")
+                    return
+                if store.get_approval(approval_id) is None:
                     self._send_status(404, "Approval not found")
                     return
                 reviewer = form.get("reviewer", [""])[0].strip()
@@ -195,6 +299,26 @@ class Dashboard:
                     self._send_status(400, "Request body must be UTF-8")
                     return None
                 return parse_qs(body, keep_blank_values=True, strict_parsing=False)
+
+            def _request_authority_is_valid(self) -> bool:
+                host_values = self.headers.get_all("Host", [])
+                if len(host_values) != 1:
+                    return False
+                allowed = getattr(self.server, "allowed_authorities", None)
+                if allowed is None:
+                    bound_host, bound_port = self.server.server_address[:2]
+                    allowed = {_format_authority(str(bound_host), int(bound_port))}
+                host = _normalize_authority(host_values[0])
+                if host is None or host not in allowed:
+                    return False
+                origin = self.headers.get("Origin")
+                if origin is None:
+                    return True
+                parsed = urlsplit(origin)
+                if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+                    return False
+                origin_authority = _normalize_authority(parsed.netloc)
+                return origin_authority is not None and origin_authority in allowed
 
             def _send_decision_error(
                 self,
@@ -288,15 +412,13 @@ class Dashboard:
         return Handler
 
 
-def serve(store: AuditStore, host: str, port: int) -> ThreadingHTTPServer:
-    validate_loopback_host(host)
-    server_class = ThreadingHTTPServer
-    if ":" in host:
-        class IPv6ThreadingHTTPServer(ThreadingHTTPServer):
-            address_family = socket.AF_INET6
-
-        server_class = IPv6ThreadingHTTPServer
-    server = server_class((host, port), Dashboard(store).app())
+def serve(store: AuditStore, host: str, port: int) -> DashboardHTTPServer:
+    family, bind_host, aliases = _resolve_loopback_bind(host)
+    server_class = _IPv6DashboardHTTPServer if family == socket.AF_INET6 else DashboardHTTPServer
+    server = server_class((bind_host, port), Dashboard(store).app())
+    server.allowed_authorities = {
+        _format_authority(alias, server.server_port) for alias in aliases
+    }
     server.serve_forever()
     return server
 
@@ -558,13 +680,14 @@ def render_approval_rows(
         error = None
         if approval_error and approval_error[0] == approval_id:
             error = approval_error[1]
+        row_form_values = form_values if error is not None else None
         actions = render_approval_actions(
             approval_id,
             str(approval["status"]),
             return_to,
             csrf_token,
             error=error,
-            form_values=form_values,
+            form_values=row_form_values,
         )
         reviewer = approval.get("approver")
         reviewer_reason = approval.get("reviewer_reason")

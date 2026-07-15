@@ -13,6 +13,7 @@ from agentpermit.audit import AuditStore
 from agentpermit.snapshot_diff import DiffLimits, compare_snapshot_archives
 from agentpermit.web import (
     Dashboard,
+    DashboardHTTPServer,
     is_loopback_host,
     render_approvals,
     render_index,
@@ -29,14 +30,17 @@ def request_once(
     *,
     token: str = "test-csrf-token",
     form: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, str], str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(store, csrf_token=token).app())
     thread = Thread(target=server.handle_request)
     thread.start()
     conn = HTTPConnection("127.0.0.1", server.server_port)
     body = urlencode(form).encode("utf-8") if form is not None else None
-    headers = {"Content-Type": "application/x-www-form-urlencoded"} if body is not None else {}
-    conn.request(method, target, body=body, headers=headers)
+    request_headers = {"Content-Type": "application/x-www-form-urlencoded"} if body is not None else {}
+    if headers:
+        request_headers.update(headers)
+    conn.request(method, target, body=body, headers=request_headers)
     response = conn.getresponse()
     response_body = response.read().decode("utf-8")
     response_headers = {key.lower(): value for key, value in response.getheaders()}
@@ -130,6 +134,42 @@ def test_approval_post_rejects_missing_or_invalid_csrf_without_mutation(tmp_path
     assert store.list_approvals(run_id)[0]["status"] == "pending"
 
 
+@pytest.mark.parametrize("header", [{"Host": "attacker.example"}, {"Origin": "http://attacker.example"}])
+def test_approval_post_rejects_foreign_host_authority_before_csrf(tmp_path, header):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id, approval_id = create_pending_approval(store, tmp_path)
+    form = {
+        "csrf_token": "test-csrf-token",
+        "reviewer": "Alice",
+        "reason": "Reviewed exact patch",
+    }
+
+    status, _, _ = request_once(
+        store,
+        "POST",
+        f"/approvals/{approval_id}/approve",
+        form=form,
+        headers=header,
+    )
+
+    assert status == 403
+    assert store.list_approvals(run_id)[0]["status"] == "pending"
+
+
+def test_unknown_approval_post_returns_404_before_form_validation(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+
+    status, _, body = request_once(
+        store,
+        "POST",
+        "/approvals/999999/approve",
+        form={"csrf_token": "test-csrf-token"},
+    )
+
+    assert status == 404
+    assert "Approval not found" in body
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("reviewer", ""), ("reviewer", "   "), ("reason", ""), ("reason", "   ")],
@@ -183,9 +223,10 @@ def test_approval_mutation_is_post_only(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id, approval_id = create_pending_approval(store, tmp_path)
 
-    status, _, _ = request_once(store, "GET", f"/approvals/{approval_id}/approve")
+    status, headers, _ = request_once(store, "GET", f"/approvals/{approval_id}/approve")
 
-    assert status in {404, 405}
+    assert status == 405
+    assert headers["allow"] == "POST"
     assert store.list_approvals(run_id)[0]["status"] == "pending"
 
 
@@ -270,6 +311,60 @@ def test_snapshot_diff_fails_closed_for_missing_corrupt_and_excessive_archives(t
     assert not missing_result.available and missing_result.reason == "snapshot_missing"
     assert not corrupt_result.available and corrupt_result.reason == "snapshot_invalid"
     assert not excessive_result.available and excessive_result.reason == "snapshot_limits_exceeded"
+
+
+@pytest.mark.parametrize(
+    ("before_text", "after_text"),
+    [("same\n", "same"), ("same\r\n", "same\n")],
+)
+def test_snapshot_diff_renders_newline_only_changes_as_human_readable(tmp_path, before_text, after_text):
+    before = write_snapshot(tmp_path / "before.zip", {"same.txt": before_text})
+    after = write_snapshot(tmp_path / "after.zip", {"same.txt": after_text})
+
+    result = compare_snapshot_archives(before, after)
+
+    entry = result.entries[0]
+    assert entry.status == "modified"
+    assert entry.display == "text"
+    assert entry.diff
+    assert "newline" in entry.diff.lower()
+
+
+def test_dashboard_server_bounds_threads_and_request_timeouts(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    server = DashboardHTTPServer(("127.0.0.1", 0), Dashboard(store).app())
+    try:
+        assert server.max_workers <= 32
+        assert server.request_timeout <= 30
+        assert server.daemon_threads
+    finally:
+        server.server_close()
+
+
+def test_validation_error_repopulates_only_matching_approval_row(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    _, first_id = create_pending_approval(store, tmp_path)
+    _, second_id = create_pending_approval(store, tmp_path)
+
+    page = render_approvals(
+        store,
+        csrf_token="token",
+        approval_error=(first_id, "Reviewer and reason are required."),
+        form_values={"reviewer": "First reviewer", "reason": "First reason"},
+    )
+
+    def row_segment(approval_id: int) -> str:
+        action_start = page.index(f"action='/approvals/{approval_id}/approve")
+        row_start = page.rfind("<tr>", 0, action_start)
+        row_end = page.index("</tr>", action_start)
+        return page[row_start:row_end]
+
+    first_segment = row_segment(first_id)
+    second_segment = row_segment(second_id)
+    assert "First reviewer" in first_segment
+    assert "First reason" in first_segment
+    assert "First reviewer" not in second_segment
+    assert "First reason" not in second_segment
 
 
 def test_run_page_uses_event_referenced_snapshots_and_shows_diff_metrics(tmp_path):

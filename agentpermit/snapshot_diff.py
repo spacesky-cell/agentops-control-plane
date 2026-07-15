@@ -164,4 +164,31 @@ def _make_entry(
         marker = "... diff truncated by dashboard limits ..."
         if rendered_chars + len(marker) + 1 <= limits.max_diff_chars:
             rendered.append(marker)
+    if not rendered and before != after:
+        before_style = _newline_style(before)
+        after_style = _newline_style(after)
+        rendered = [
+            f"--- before/{path}",
+            f"+++ after/{path}",
+            "@@ newline metadata @@",
+            f"- newline style: {before_style}",
+            f"+ newline style: {after_style}",
+        ]
     return DiffEntry(path, status, "text", before_size, after_size, "\n".join(rendered))
+
+
+def _newline_style(content: bytes) -> str:
+    has_crlf = b"\r\n" in content
+    normalized = content.replace(b"\r\n", b"")
+    has_lf = b"\n" in normalized
+    has_cr = b"\r" in content.replace(b"\r\n", b"")
+    styles = []
+    if has_crlf:
+        styles.append("CRLF")
+    if has_lf:
+        styles.append("LF")
+    if has_cr:
+        styles.append("CR")
+    label = "/".join(styles) if styles else "none"
+    final = "present" if content.endswith((b"\n", b"\r")) else "absent"
+    return f"{label}, final newline={final}"
