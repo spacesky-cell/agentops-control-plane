@@ -1,6 +1,6 @@
 [project]
 name = "agentpermit"
-version = "0.2.0"
+version = "0.3.0"
 description = "Vendor-neutral control plane for governed AI agent tool execution"
 readme = "README.md"
 requires-python = ">=3.10"

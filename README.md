@@ -19,27 +19,27 @@ It is designed for a developer workstation. It is not a container, an operating-
 
 ## Install
 
-AgentPermit is currently prepared for adoption and is not published to npm yet. From a checkout, build and install the exact npm artifact locally:
+Install the public npm package globally:
 
 ```powershell
-npm pack
-npm install --ignore-scripts .\agentpermit-0.2.0.tgz
-npx --no-install agentpermit --help
+npm install --global agentpermit@0.3.0
+agentpermit --version
+agentpermit --help
 ```
 
-The launcher requires Node.js 18+ and Python 3.10+. The package version remains `0.2.0` until the release task.
+The launcher requires Node.js 18+ and Python 3.10+. It has no npm dependencies or install hooks.
 
 ## Three-minute quick start
 
 Run the deterministic example from the repository checkout through the installed npm launcher:
 
 ```powershell
-npx --no-install agentpermit --home .demo run-script `
+agentpermit --home .demo run-script `
   --plan examples\scripted_fix_agent.json `
   --source examples\sample_repo `
   --auto-approve
-npx --no-install agentpermit --home .demo runs
-npx --no-install agentpermit --home .demo serve --port 8765
+agentpermit --home .demo runs
+agentpermit --home .demo serve --port 8765
 ```
 
 Open <http://127.0.0.1:8765>. The dashboard shows the completed run, policy trace, approval decision, and bounded snapshot evidence. The original `examples\sample_repo` remains unchanged.
@@ -47,12 +47,12 @@ Open <http://127.0.0.1:8765>. The dashboard shows the completed run, policy trac
 For a real MCP session, start the server against a source directory and task:
 
 ```powershell
-npx --no-install agentpermit --home .demo mcp `
+agentpermit --home .demo mcp `
   --source examples\sample_repo `
   --task "Inspect the repository"
 ```
 
-The first `tools/call` creates the governed run. A policy-gated call returns a stable pending approval id; approve it in the dashboard or with `npx --no-install agentpermit --home .demo approve <approval_id>`, then retry the identical MCP call.
+The first `tools/call` creates the governed run. A policy-gated call returns a stable pending approval id; approve it in the dashboard or with `agentpermit --home .demo approve <approval_id>`, then retry the identical MCP call.
 
 ## Standard MCP configuration
 
@@ -61,7 +61,7 @@ The public integration is the standard MCP stdio server. Use the exact command s
 Claude Code, project scope:
 
 ```powershell
-claude mcp add --scope project agentpermit -- npx --no-install agentpermit --home . mcp --source . --task "Govern this workspace"
+claude mcp add --scope project agentpermit -- npx --yes agentpermit@0.3.0 --home . mcp --source . --task "Govern this workspace"
 ```
 
 Codex project configuration in `.codex/config.toml`:
@@ -69,7 +69,7 @@ Codex project configuration in `.codex/config.toml`:
 ```toml
 [mcp_servers.agentpermit]
 command = "npx"
-args = ["--no-install", "agentpermit", "--home", ".", "mcp", "--source", ".", "--task", "Govern this workspace"]
+args = ["--yes", "agentpermit@0.3.0", "--home", ".", "mcp", "--source", ".", "--task", "Govern this workspace"]
 ```
 
 Use an absolute path to the npm executable when the client cannot resolve `npx`. Keep `--auto-approve` out of client configuration; it is a server-process option for a deliberately trusted local demo only.
@@ -88,11 +88,11 @@ Policy decisions are made by the gateway before a tool executes. Writes and patc
 CLI alternatives use the same `.demo` home as the run:
 
 ```powershell
-npx --no-install agentpermit --home .demo approvals --run-id <run_id>
-npx --no-install agentpermit --home .demo approve <approval_id> --approver reviewer --reason "Reviewed exact request"
-npx --no-install agentpermit --home .demo reject <approval_id> --approver reviewer --reason "Rejected exact request"
-npx --no-install agentpermit --home .demo show <run_id>
-npx --no-install agentpermit --home .demo export <run_id> --format html --out report.html
+agentpermit --home .demo approvals --run-id <run_id>
+agentpermit --home .demo approve <approval_id> --approver reviewer --reason "Reviewed exact request"
+agentpermit --home .demo reject <approval_id> --approver reviewer --reason "Rejected exact request"
+agentpermit --home .demo show <run_id>
+agentpermit --home .demo export <run_id> --format html --out report.html
 ```
 
 ## Architecture
@@ -131,7 +131,7 @@ python -m build
 npm test
 npm pack --dry-run
 python -m agentpermit --home .eval eval --tasks examples/tasks.jsonl --auto-approve
-python scripts/validate_release.py --tag v0.2.0
+python scripts/validate_release.py --tag v0.3.0
 git diff --check
 ```
 
