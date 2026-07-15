@@ -62,10 +62,10 @@ The threshold is met with meaningful tests for CLI workflows, policy boundaries,
 
 - Workflow default permission is `contents: read`.
 - npm publication is isolated to the protected `npm` environment and receives only `id-token: write`; every unspecified permission is disabled.
-- First publication uses `secrets.NPM_TOKEN` through `NODE_AUTH_TOKEN`; no credential is stored in source or artifacts.
+- The first publication used a short-lived `secrets.NPM_TOKEN` through `NODE_AUTH_TOKEN`; no credential was stored in source or artifacts.
 - npm publish uses `--provenance --access public`.
 - GitHub Release runs only after npm publication succeeds and receives `contents: write`.
-- The workflow is structured so Task 8 can replace the short-lived `NPM_TOKEN` path with npm Trusted Publishing while retaining provenance.
+- Task 8 later replaced the short-lived `NPM_TOKEN` path with npm Trusted Publishing while retaining provenance.
 
 ## Exact Commands
 
@@ -90,7 +90,7 @@ git diff --check
 
 - Local Windows cannot exercise ten POSIX/symlink privilege tests; CI retains Linux coverage for those paths.
 - Hosted workflow execution remains the authoritative check; local actionlint was verified reproducibly with `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.9`.
-- No tag, publish, push, release, or version bump was performed. Task 8 must handle token migration and first-publication release-state changes.
+- At Task 7 completion, no tag, publish, push, release, or version bump had been performed. Task 8 later completed the `v0.3.0` release and token migration.
 
 ## Fix Review
 
@@ -105,7 +105,7 @@ git diff --check
 
 - `package.json` now declares the final public repository URL, homepage, and issues URL without changing version `0.2.0`.
 - All `run` blocks consume quoted environment variables; no `${{ ... }}` expression remains in shell source. A static test forbids regressions.
-- `publish-npm` has exactly `id-token: write`, retains protected environment `npm`, and uses the bootstrap `NPM_TOKEN` only as `NODE_AUTH_TOKEN`.
+- At Task 7 completion, `publish-npm` had exactly `id-token: write`, retained protected environment `npm`, and used the bootstrap `NPM_TOKEN` only as `NODE_AUTH_TOKEN`; Task 8 later removed that token injection after configuring Trusted Publishing.
 - `scripts/publish_npm.mjs` computes local SHA-512 SRI, queries the exact registry version, skips only an exact integrity match, and fails on mismatches or non-404 lookup errors. Publication remains `--provenance --access public`.
 - GitHub Release creation uses explicit `GH_REPO`, creates only when absent, and always uploads all artifacts/checksums with `--clobber` for retry recovery.
 - Source tag/changelog validation runs immediately after dev installation; artifact validation runs again after build/package creation.
