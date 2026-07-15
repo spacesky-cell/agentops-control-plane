@@ -131,4 +131,67 @@ def test_windows_ci_runs_security_sensitive_python_suite() -> None:
     assert job["runs-on"] == "windows-latest"
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     assert "pip install" in commands
+    assert "python -m coverage run --parallel-mode -m pytest" in commands
+
+
+def test_ci_combines_cross_platform_coverage_before_enforcing_threshold() -> None:
+    workflow = _load(ROOT / ".github" / "workflows" / "ci.yml")
+    jobs = workflow["jobs"]
+
+    for job_name, artifact_name in (
+        ("quality", "coverage-ubuntu"),
+        ("windows-python", "coverage-windows"),
+    ):
+        steps = jobs[job_name]["steps"]
+        commands = "\n".join(step.get("run", "") for step in steps)
+        assert "python -m coverage run --parallel-mode -m pytest" in commands
+        assert "--fail-under" not in commands
+        upload = next(
+            step
+            for step in steps
+            if step.get("uses", "").startswith("actions/upload-artifact@")
+        )
+        assert upload["with"] == {
+            "name": artifact_name,
+            "path": ".coverage.*",
+            "include-hidden-files": True,
+            "if-no-files-found": "error",
+            "retention-days": 1,
+        }
+
+    coverage = jobs["coverage"]
+    assert set(coverage["needs"]) == {"quality", "windows-python"}
+    download = next(
+        step
+        for step in coverage["steps"]
+        if step.get("uses", "").startswith("actions/download-artifact@")
+    )
+    assert download["with"] == {
+        "pattern": "coverage-*",
+        "path": "coverage-data",
+        "merge-multiple": True,
+    }
+    commands = "\n".join(step.get("run", "") for step in coverage["steps"])
+    assert "python -m coverage combine coverage-data" in commands
+    assert "python -m coverage report --fail-under=90" in commands
+
+
+def test_coverage_uses_relative_paths_and_release_delegates_threshold_to_ci() -> None:
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^relative_files\s*=\s*true$", pyproject)
+    assert re.search(r"(?m)^fail_under\s*=\s*90$", pyproject)
+
+    release = _load(ROOT / ".github" / "workflows" / "release.yml")
+    commands = "\n".join(
+        step.get("run", "") for step in release["jobs"]["validate-build"]["steps"]
+    )
     assert "python -m pytest -q" in commands
+    assert "coverage" not in commands
+    assert "--cov" not in commands
+
+
+def test_ci_push_runs_only_on_main_while_pr_and_manual_triggers_remain() -> None:
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^  push:\n    branches: \[main\]$", text)
+    assert re.search(r"(?m)^  pull_request:$", text)
+    assert re.search(r"(?m)^  workflow_dispatch:$", text)

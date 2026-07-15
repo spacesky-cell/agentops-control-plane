@@ -322,3 +322,79 @@ this report update and before commit.
 Hosted Linux is still the authoritative execution evidence for the two
 POSIX-only filesystem race/cleanup assertions. No push or workflow rerun was
 performed in this fix wave.
+
+## Cross-Platform Coverage CI Fix
+
+### Hosted RED Evidence
+
+The follow-up hosted Linux run completed the full behavior suite with **328
+passed, 10 skipped**, including the POSIX-only assertions, but failed its
+Linux-only coverage gate at **87.05%**. The same full suite reports **90.02%**
+on Windows because the platform-specific Windows runtime paths are legitimately
+unreachable on Linux. Lowering the threshold or excluding platform code would
+weaken the repository-wide coverage contract instead of measuring it correctly.
+
+### Corrections
+
+- Coverage now records source paths relative to the repository through
+  `[tool.coverage.run] relative_files = true`.
+- The Ubuntu `quality` job retains Ruff and mypy ownership, then runs the full
+  behavior suite with `coverage run --parallel-mode`. The Windows security job
+  runs the same full behavior suite through the same coverage command.
+- Each platform uploads its hidden `.coverage.*` file under a unique artifact
+  name using the reviewed immutable `upload-artifact` commit, explicit hidden
+  file inclusion, missing-file failure, and one-day retention.
+- A dedicated `coverage` job depends on both platform producers, downloads both
+  artifacts with the reviewed immutable `download-artifact` commit and
+  `pattern`/`merge-multiple`, combines them, and exclusively enforces
+  `coverage report --fail-under=90`.
+- The release workflow still runs the complete Python behavior suite, but no
+  longer applies an invalid Linux-only repository coverage threshold. Required
+  CI owns the cross-platform threshold before release.
+- CI pushes are limited to `main`; pull requests and manual dispatch remain.
+  This removes duplicate feature-branch push and pull-request matrices.
+- Workflow contract tests cover producer/consumer topology, immutable hidden
+  artifact transfer, relative source paths, the retained 90% threshold,
+  release delegation, and trigger scope.
+
+### RED/GREEN And Local Verification
+
+The new workflow tests initially produced **4 failures, 5 passes** for the
+missing producer commands, aggregation job, relative path setting, release
+delegation, and trigger restriction. After the workflow changes:
+
+```text
+python -m pytest tests/test_workflows.py -q
+```
+
+Result: **9 passed**.
+
+The exact producer/combine/report command path was simulated locally with one
+full Windows parallel coverage data file copied into two artifact-shaped hidden
+files. `coverage combine coverage-data` combined the first and safely detected
+the duplicate second file; `coverage report --fail-under=90` then passed at
+**90.02%**. The full producer run reported **331 passed, 10 skipped**.
+
+Additional verification:
+
+```text
+npm test
+python -m ruff format --check agentpermit tests scripts
+python -m ruff check agentpermit tests scripts
+python -m mypy --no-incremental agentpermit
+python -m mypy --no-incremental --platform linux agentpermit
+python -c "import yaml; [yaml.safe_load(open(p, encoding='utf-8')) for p in ['.github/workflows/ci.yml','.github/workflows/release.yml']]"
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.9
+git diff --check
+```
+
+Results: npm **16 passed**; Ruff format/check clean; both mypy platform models
+report no issues in 17 source files; workflow YAML and actionlint exit zero.
+The final diff check is rerun after this report update and before commit.
+
+### Remaining CI Concern
+
+The local combine simulation validates artifact discovery and coverage command
+compatibility, but hosted CI remains authoritative for the genuine Linux and
+Windows data merge and the resulting repository-wide percentage. No workflow
+run was triggered and no push, merge, or publication was performed.

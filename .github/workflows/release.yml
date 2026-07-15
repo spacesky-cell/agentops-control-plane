@@ -38,7 +38,7 @@ jobs:
       - run: ruff format --check agentpermit tests scripts
       - run: ruff check agentpermit tests scripts
       - run: mypy --no-incremental agentpermit
-      - run: python -m pytest --cov=agentpermit --cov-report=term-missing --cov-fail-under=90
+      - run: python -m pytest -q
       - run: npm test
       - run: python -m agentpermit --home "$EVAL_HOME" eval --tasks examples/tasks.jsonl --auto-approve
         env:
