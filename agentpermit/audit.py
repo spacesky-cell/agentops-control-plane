@@ -144,7 +144,9 @@ class AuditStore:
         )
 
     def _migrate_v1_to_v2(self, conn: sqlite3.Connection) -> None:
-        approval_rows = conn.execute("SELECT * FROM approvals ORDER BY id ASC").fetchall()
+        approval_rows = conn.execute(
+            "SELECT * FROM approvals ORDER BY id ASC"
+        ).fetchall()
         conn.execute("ALTER TABLE approvals RENAME TO approvals_v1")
         self._create_approvals_table(conn)
         active_rows: dict[tuple[str, str, str], tuple[int, str]] = {}
@@ -155,7 +157,9 @@ class AuditStore:
             except (TypeError, json.JSONDecodeError):
                 parsed_payload = {
                     "migration_error": "Legacy approval payload was not valid JSON.",
-                    "payload_sha256": hashlib.sha256(str(raw_payload).encode("utf-8")).hexdigest(),
+                    "payload_sha256": hashlib.sha256(
+                        str(raw_payload).encode("utf-8")
+                    ).hexdigest(),
                 }
             fingerprint = ""
             if isinstance(parsed_payload, dict):
@@ -198,11 +202,7 @@ class AuditStore:
                         else None
                     ),
                     fingerprint,
-                    (
-                        redact_text(row["reason"])
-                        if row["reason"] is not None
-                        else None
-                    ),
+                    (redact_text(row["reason"]) if row["reason"] is not None else None),
                     None,
                     json.dumps(redact_durable(parsed_payload), ensure_ascii=False),
                 ),
@@ -236,7 +236,9 @@ class AuditStore:
             )
 
     def _redact_legacy_events(self, conn: sqlite3.Connection) -> None:
-        for row in conn.execute("SELECT id, message, payload_json FROM events").fetchall():
+        for row in conn.execute(
+            "SELECT id, message, payload_json FROM events"
+        ).fetchall():
             try:
                 payload = json.loads(row["payload_json"])
             except (TypeError, json.JSONDecodeError):
@@ -280,7 +282,8 @@ class AuditStore:
         self, conn: sqlite3.Connection, table: str, column: str, definition: str
     ) -> None:
         columns = {
-            row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
         }
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
@@ -358,9 +361,7 @@ class AuditStore:
             raise ValueError(f"Run not found: {run_id}")
         raw_identity = run.get("workspace_identity")
         if not raw_identity:
-            raise ValueError(
-                f"Run has no authoritative workspace identity: {run_id}"
-            )
+            raise ValueError(f"Run has no authoritative workspace identity: {run_id}")
         try:
             parsed = json.loads(str(raw_identity))
         except json.JSONDecodeError as exc:
@@ -519,7 +520,9 @@ class AuditStore:
                     ),
                 ),
             )
-            return int(cursor.lastrowid)
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return an event id")
+            return cursor.lastrowid
 
     def create_approval(
         self,
@@ -529,7 +532,9 @@ class AuditStore:
         reason: str,
         request_fingerprint: str | None = None,
     ) -> int:
-        fingerprint = request_fingerprint or str(payload.get("request_fingerprint") or "")
+        fingerprint = request_fingerprint or str(
+            payload.get("request_fingerprint") or ""
+        )
         if not fingerprint:
             fingerprint = self._fallback_fingerprint(tool_name, payload)
         resolution = self.resolve_approval(
@@ -590,7 +595,9 @@ class AuditStore:
                         ),
                     ),
                 )
-                approval_id = int(cursor.lastrowid)
+                if cursor.lastrowid is None:
+                    raise RuntimeError("SQLite did not return an approval id")
+                approval_id = cursor.lastrowid
                 created = True
                 active_status = "pending"
             else:
@@ -648,7 +655,7 @@ class AuditStore:
         request_fingerprint: str,
         status: str,
     ) -> sqlite3.Row | None:
-        return conn.execute(
+        row: sqlite3.Row | None = conn.execute(
             """
             SELECT * FROM approvals
             WHERE run_id = ? AND tool_name = ? AND request_fingerprint = ? AND status = ?
@@ -656,6 +663,7 @@ class AuditStore:
             """,
             (run_id, tool_name, request_fingerprint, status),
         ).fetchone()
+        return row
 
     def _fallback_fingerprint(self, tool_name: str, payload: Any) -> str:
         encoded = json.dumps(
@@ -728,7 +736,9 @@ class AuditStore:
 
     def list_runs(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM runs ORDER BY started_at DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM runs ORDER BY started_at DESC"
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
@@ -750,10 +760,13 @@ class AuditStore:
         with self._connect() as conn:
             if run_id:
                 rows = conn.execute(
-                    "SELECT * FROM approvals WHERE run_id = ? ORDER BY id ASC", (run_id,)
+                    "SELECT * FROM approvals WHERE run_id = ? ORDER BY id ASC",
+                    (run_id,),
                 ).fetchall()
             else:
-                rows = conn.execute("SELECT * FROM approvals ORDER BY id DESC").fetchall()
+                rows = conn.execute(
+                    "SELECT * FROM approvals ORDER BY id DESC"
+                ).fetchall()
         approvals = [dict(row) for row in rows]
         for approval in approvals:
             approval["payload"] = json.loads(approval.pop("payload_json"))

@@ -121,10 +121,16 @@ AgentPermit 的 Dashboard 只绑定回环地址，面向本地单用户。复制
 
 ```powershell
 python -m pip install -e ".[dev]"
-python -m pytest -q
+ruff format --check agentpermit tests scripts
+ruff check agentpermit tests scripts
+mypy --no-incremental agentpermit
+python -m pytest --cov=agentpermit --cov-report=term-missing --cov-fail-under=90
 python -m build
 npm test
 npm pack --dry-run
+python -m agentpermit --home .eval eval --tasks examples/tasks.jsonl --auto-approve
+python scripts/validate_release.py --tag v0.2.0
+git diff --check
 ```
 
 变更、测试和漏洞披露流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。项目使用 MIT 许可证，详见 [LICENSE](LICENSE)。

@@ -48,8 +48,12 @@ def make_directory_alias(link: Path, target: Path) -> None:
 def test_mcp_client_cannot_enable_auto_approval(tmp_path):
     source = make_source(tmp_path)
     gateway = RuntimeGateway.from_home(tmp_path / "project")
-    session = McpStdioSession(gateway, source=source, task="write", agent_name="untrusted-mcp")
-    session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}})
+    session = McpStdioSession(
+        gateway, source=source, task="write", agent_name="untrusted-mcp"
+    )
+    session.handle(
+        {"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {}}
+    )
     session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
     response = session.handle(
         {
@@ -90,15 +94,21 @@ def test_identical_pending_requests_reuse_the_same_approval(tmp_path):
 def test_concurrent_resumes_consume_one_approved_row_and_execute_once(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     run_id, workspace = gateway.start_run("consume race", "test-agent")
-    request = ToolRequest("write_file", {"path": "created.txt", "content": "one execution"})
+    request = ToolRequest(
+        "write_file", {"path": "created.txt", "content": "one execution"}
+    )
     pending = gateway.execute_tool(run_id, workspace, request)
-    gateway.audit_store.decide_approval(pending.approval_id, "approved", "reviewer", "safe")
+    gateway.audit_store.decide_approval(
+        pending.approval_id, "approved", "reviewer", "safe"
+    )
     workers = 12
     barrier = Barrier(workers)
 
     def resume():
         barrier.wait()
-        return gateway.execute_tool(run_id, workspace, request, preapproved_by="reviewer")
+        return gateway.execute_tool(
+            run_id, workspace, request, preapproved_by="reviewer"
+        )
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         results = list(pool.map(lambda _index: resume(), range(workers)))
@@ -127,7 +137,9 @@ def test_rejected_matching_approval_is_terminal(tmp_path):
     run_id, workspace = gateway.start_run("reject", "test-agent")
     request = ToolRequest("write_file", {"path": "created.txt", "content": "denied"})
     pending = gateway.execute_tool(run_id, workspace, request)
-    gateway.audit_store.decide_approval(pending.approval_id, "rejected", "reviewer", "unsafe")
+    gateway.audit_store.decide_approval(
+        pending.approval_id, "rejected", "reviewer", "unsafe"
+    )
 
     result = gateway.execute_tool(run_id, workspace, request, preapproved_by="reviewer")
 
@@ -139,7 +151,9 @@ def test_rejected_matching_approval_is_terminal(tmp_path):
 
 def test_rejection_before_pause_keeps_run_failed(tmp_path):
     store = AuditStore(tmp_path / "audit.db")
-    run_id = store.start_run("reject before pause", "test-agent", tmp_path / "workspace")
+    run_id = store.start_run(
+        "reject before pause", "test-agent", tmp_path / "workspace"
+    )
     approval_id = store.create_approval(
         run_id,
         "write_file",
@@ -152,7 +166,9 @@ def test_rejection_before_pause_keeps_run_failed(tmp_path):
 
     approval = store.get_approval(approval_id)
     run = store.get_run(run_id)
-    finished = [event for event in store.get_events(run_id) if event["type"] == "run_finished"]
+    finished = [
+        event for event in store.get_events(run_id) if event["type"] == "run_finished"
+    ]
     assert approval and approval["status"] == "rejected"
     assert run and run["status"] == "failed"
     assert run["ended_at"] is not None
@@ -174,7 +190,9 @@ def test_rejection_after_pause_finishes_run_once(tmp_path):
 
     approval = store.get_approval(approval_id)
     run = store.get_run(run_id)
-    finished = [event for event in store.get_events(run_id) if event["type"] == "run_finished"]
+    finished = [
+        event for event in store.get_events(run_id) if event["type"] == "run_finished"
+    ]
     assert approval and approval["status"] == "rejected"
     assert run and run["status"] == "failed"
     assert run["ended_at"] is not None
@@ -196,11 +214,16 @@ def test_approval_before_pause_keeps_run_waiting_with_pause_event(tmp_path):
 
     run = gateway.audit_store.get_run(run_id)
     assert run and run["status"] == "waiting_for_approval"
-    assert len([
-        event
-        for event in gateway.audit_store.get_events(run_id)
-        if event["type"] == "run_paused"
-    ]) == 1
+    assert (
+        len(
+            [
+                event
+                for event in gateway.audit_store.get_events(run_id)
+                if event["type"] == "run_paused"
+            ]
+        )
+        == 1
+    )
 
 
 def test_auto_approval_is_audited_and_consumed_before_execution(tmp_path):
@@ -226,8 +249,12 @@ def test_protected_files_are_excluded_from_copy_listing_and_snapshots(tmp_path):
     source = make_source(tmp_path)
     (source / ".env").write_text("API_TOKEN=copy-marker", encoding="utf-8")
     (source / "service_token.txt").write_text("copy-marker", encoding="utf-8")
-    (source / "credentials.json").write_text('{"password":"copy-marker"}', encoding="utf-8")
-    (source / ".npmrc").write_text("//registry.example/:_authToken=copy-marker", encoding="utf-8")
+    (source / "credentials.json").write_text(
+        '{"password":"copy-marker"}', encoding="utf-8"
+    )
+    (source / ".npmrc").write_text(
+        "//registry.example/:_authToken=copy-marker", encoding="utf-8"
+    )
     (source / "id_ed25519").write_text("copy-marker", encoding="utf-8")
     nested = source / "nested"
     nested.mkdir()
@@ -245,7 +272,9 @@ def test_protected_files_are_excluded_from_copy_listing_and_snapshots(tmp_path):
     assert not (workspace / "id_ed25519").exists()
     assert not (workspace / "nested" / ".env.production").exists()
     assert listed == ["app.py"]
-    before = tmp_path / "project" / ".agentpermit" / "snapshots" / f"{run_id}-before.zip"
+    before = (
+        tmp_path / "project" / ".agentpermit" / "snapshots" / f"{run_id}-before.zip"
+    )
     with zipfile.ZipFile(before) as archive:
         assert archive.namelist() == ["app.py"]
 
@@ -378,7 +407,9 @@ def test_workspace_owner_rejects_protected_symlink_alias_and_listing_omits_it(tm
     with pytest.raises(ValueError, match="Protected"):
         gateway.tool_executor.write_file(workspace, "settings.txt", "SECRET=changed")
     with pytest.raises(ValueError, match="Protected"):
-        gateway.tool_executor.patch_text(workspace, "settings.txt", "original", "changed")
+        gateway.tool_executor.patch_text(
+            workspace, "settings.txt", "original", "changed"
+        )
 
     assert alias.is_symlink()
     assert protected.read_text(encoding="utf-8") == "SECRET=original"
@@ -417,7 +448,9 @@ def test_workspace_file_operations_reject_target_replacement_after_validation(
         elif operation == "write":
             gateway.tool_executor.write_file(workspace, "safe.txt", "changed")
         else:
-            gateway.tool_executor.patch_text(workspace, "safe.txt", "protected", "changed")
+            gateway.tool_executor.patch_text(
+                workspace, "safe.txt", "protected", "changed"
+            )
 
     assert swapped
     assert protected.read_text(encoding="utf-8") == "protected-secret"
@@ -461,9 +494,7 @@ def test_workspace_new_file_rejects_parent_replacement_after_validation(
         assert (parent / "new.txt").read_text(encoding="utf-8") == "sensitive"
     else:
         with pytest.raises(ValueError, match="Directory changed during access"):
-            gateway.tool_executor.write_file(
-                workspace, "nested/new.txt", "sensitive"
-            )
+            gateway.tool_executor.write_file(workspace, "nested/new.txt", "sensitive")
         assert not rename_blocked
         assert not (parent / "new.txt").exists()
     assert not (original_parent / "new.txt").exists()
@@ -484,8 +515,7 @@ def test_workspace_missing_parent_rejects_concurrent_alias_insertion(
     def insert_alias_before_mkdir(path, mode=0o777, *args, **kwargs):
         nonlocal inserted
         targets_parent = Path(path) == missing_parent or (
-            kwargs.get("dir_fd") is not None
-            and Path(path) == Path(missing_parent.name)
+            kwargs.get("dir_fd") is not None and Path(path) == Path(missing_parent.name)
         )
         if targets_parent and not inserted:
             make_directory_alias(missing_parent, outside)
@@ -636,9 +666,7 @@ def test_snapshot_rejects_target_replacement_before_archiving(tmp_path, monkeypa
     assert not snapshot.exists()
 
 
-def test_source_copy_rejects_file_replacement_after_policy_check(
-    tmp_path, monkeypatch
-):
+def test_source_copy_rejects_file_replacement_after_policy_check(tmp_path, monkeypatch):
     manager = workspace_module.WorkspaceManager(tmp_path / "project" / ".agentpermit")
     source = tmp_path / "source-race"
     source.mkdir()
@@ -822,7 +850,9 @@ def test_snapshot_failure_after_storage_rename_removes_temp_from_leased_object(
     def move_storage_then_fail(*args, **kwargs):
         os.replace(manager.snapshots_dir, moved_storage)
         os.replace(replacement_storage, manager.snapshots_dir)
-        raise workspace_module.WorkspaceIntegrityError("injected leased cleanup failure")
+        raise workspace_module.WorkspaceIntegrityError(
+            "injected leased cleanup failure"
+        )
 
     monkeypatch.setattr(manager, "_walk_workspace", move_storage_then_fail)
 
@@ -917,9 +947,7 @@ def test_snapshot_temp_entry_replacement_is_not_promoted_or_deleted(
     assert replacement_path is not None
     assert replacement_path.read_bytes() == b"must-survive"
     assert displaced_temp.exists()
-    assert not (
-        manager.snapshots_dir / "run_snapshot_temp_replace-before.zip"
-    ).exists()
+    assert not (manager.snapshots_dir / "run_snapshot_temp_replace-before.zip").exists()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX post-promotion storage binding")
@@ -1151,7 +1179,9 @@ def test_open_new_closes_fd_and_preserves_primary_when_cleanup_fails(
 
 def test_auto_approve_consumes_human_approval_without_overwriting_provenance(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
-    run_id = store.start_run("approval provenance", "test-agent", tmp_path / "workspace")
+    run_id = store.start_run(
+        "approval provenance", "test-agent", tmp_path / "workspace"
+    )
     fingerprint = "approved-request"
     approval_id = store.create_approval(
         run_id,
@@ -1160,7 +1190,9 @@ def test_auto_approve_consumes_human_approval_without_overwriting_provenance(tmp
         "Write approval.",
         fingerprint,
     )
-    store.decide_approval(approval_id, "approved", "human-reviewer", "Reviewed manually")
+    store.decide_approval(
+        approval_id, "approved", "human-reviewer", "Reviewed manually"
+    )
     before = store.list_approvals(run_id)[0]
 
     resolution = store.resolve_approval(
@@ -1349,9 +1381,7 @@ def test_v1_migration_redacts_all_legacy_durable_fields(tmp_path):
         "note": "ordinary approval payload token=[redacted] retained",
     }
     assert event["message"] == "ordinary event password=[redacted] retained"
-    assert event["payload"] == {
-        "note": "ordinary event payload [redacted] retained"
-    }
+    assert event["payload"] == {"note": "ordinary event payload [redacted] retained"}
     migrated = json.dumps(
         {"run": run, "approval": approval, "event": event}, ensure_ascii=False
     )

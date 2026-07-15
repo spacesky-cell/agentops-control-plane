@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Callable
 
 
 REDACTED = "[redacted]"
@@ -68,9 +68,7 @@ def _redact_quoted_assignment(match: re.Match[str]) -> str:
         re.IGNORECASE,
     )
     replacement = (
-        f"{authorization.group('scheme')} {REDACTED}"
-        if authorization
-        else REDACTED
+        f"{authorization.group('scheme')} {REDACTED}" if authorization else REDACTED
     )
     quote = match.group("value_quote")
     return f"{match.group('prefix')}{quote}{replacement}{quote}"
@@ -86,7 +84,9 @@ def _redact_unquoted_assignment(match: re.Match[str]) -> str:
     return f"{match.group('prefix')}{replacement}"
 
 
-_CREDENTIAL_REPLACEMENTS = [
+_CREDENTIAL_REPLACEMENTS: list[
+    tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]]
+] = [
     (
         re.compile(r"(?P<prefix>\bhttps?://)[^/@\s:]+:[^/@\s]+@", re.IGNORECASE),
         rf"\g<prefix>{REDACTED}@",
@@ -117,9 +117,7 @@ _CREDENTIAL_REPLACEMENTS = [
         REDACTED,
     ),
     (
-        re.compile(
-            r"(?P<prefix>\bBearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE
-        ),
+        re.compile(r"(?P<prefix>\bBearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
         rf"\g<prefix>{REDACTED}",
     ),
     (
@@ -323,8 +321,7 @@ def _redact_malformed_command_args(value: Any) -> Any:
     if not isinstance(value, Mapping):
         return _summarize_unsafe(value)
     return {
-        redact_text(str(key)): _summarize_unsafe(item)
-        for key, item in value.items()
+        redact_text(str(key)): _summarize_unsafe(item) for key, item in value.items()
     }
 
 

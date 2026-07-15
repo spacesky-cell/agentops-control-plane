@@ -77,4 +77,3 @@ class ToolResult:
     @property
     def ok(self) -> bool:
         return self.status == ToolStatus.OK
-

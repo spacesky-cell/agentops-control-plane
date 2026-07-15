@@ -380,7 +380,9 @@ def test_command_values_never_reach_raw_sqlite_payloads(tmp_path):
     }
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id = store.start_run("command redaction", "test-agent", tmp_path / "workspace")
-    store.add_event(run_id, "command", "ordinary", {"request": command, "result": result})
+    store.add_event(
+        run_id, "command", "ordinary", {"request": command, "result": result}
+    )
     store.create_approval(run_id, "run_command", {"args": command}, "review")
 
     with sqlite3.connect(store.db_path) as conn:
@@ -422,7 +424,9 @@ def test_command_values_never_reach_raw_sqlite_payloads(tmp_path):
                 "program": "tool",
                 "args": [],
                 "status": "plain-status-secret",
-                "ordinary_extra": {"nested-ghp_abcdefghijklmnopqrstuvwxyz": "nested-secret"},
+                "ordinary_extra": {
+                    "nested-ghp_abcdefghijklmnopqrstuvwxyz": "nested-secret"
+                },
                 "token-ghp_abcdefghijklmnopqrstuvwxyz": "key-secret",
             },
             (
@@ -434,9 +438,7 @@ def test_command_values_never_reach_raw_sqlite_payloads(tmp_path):
         ),
     ],
 )
-def test_tool_aware_redaction_fails_safe_for_malformed_command_args(
-    malformed, secrets
-):
+def test_tool_aware_redaction_fails_safe_for_malformed_command_args(malformed, secrets):
     durable = redaction_module.redact_tool_args("run_command", malformed)
     serialized = str(durable)
 
@@ -454,9 +456,7 @@ def test_tool_aware_redaction_rejects_nested_non_string_command_args():
 
     assert "wrong-type-secret" not in str(durable)
     assert durable["program"] == summarize_content("tool")
-    assert durable["args"][0]["ordinary"] == summarize_content(
-        "wrong-type-secret"
-    )
+    assert durable["args"][0]["ordinary"] == summarize_content("wrong-type-secret")
 
 
 def test_redact_durable_routes_malformed_command_shape_to_fail_safe_redaction():

@@ -34,14 +34,22 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_script = sub.add_parser("run-script", help="Run a deterministic scripted agent")
-    run_script.add_argument("--plan", required=True, help="Path to scripted agent JSON plan")
-    run_script.add_argument("--source", help="Source directory copied into an isolated workspace")
+    run_script.add_argument(
+        "--plan", required=True, help="Path to scripted agent JSON plan"
+    )
+    run_script.add_argument(
+        "--source", help="Source directory copied into an isolated workspace"
+    )
     run_script.add_argument("--task", default="Run scripted agent task")
     run_script.add_argument("--auto-approve", action="store_true")
 
-    resume_script = sub.add_parser("resume-script", help="Resume a waiting scripted agent run")
+    resume_script = sub.add_parser(
+        "resume-script", help="Resume a waiting scripted agent run"
+    )
     resume_script.add_argument("run_id")
-    resume_script.add_argument("--plan", required=True, help="Path to scripted agent JSON plan")
+    resume_script.add_argument(
+        "--plan", required=True, help="Path to scripted agent JSON plan"
+    )
     resume_script.add_argument("--approver", default="human")
     resume_script.add_argument("--auto-approve-remaining", action="store_true")
 
@@ -73,9 +81,19 @@ def main(argv: list[str] | None = None) -> None:
     serve_cmd.add_argument("--port", type=int, default=8765)
 
     mcp = sub.add_parser("mcp", help="Serve a governed standard MCP JSON-lines session")
-    mcp.add_argument("--source", required=True, help="Source directory copied into an isolated workspace")
-    mcp.add_argument("--task", required=True, help="Task description for the governed run")
-    mcp.add_argument("--auto-approve", action="store_true", help="Trust this local server to auto-approve policy gates")
+    mcp.add_argument(
+        "--source",
+        required=True,
+        help="Source directory copied into an isolated workspace",
+    )
+    mcp.add_argument(
+        "--task", required=True, help="Task description for the governed run"
+    )
+    mcp.add_argument(
+        "--auto-approve",
+        action="store_true",
+        help="Trust this local server to auto-approve policy gates",
+    )
 
     init_policy = sub.add_parser("init-policy", help="Write a default policy JSON")
     init_policy.add_argument("--out", default="examples/policy.json")
@@ -105,6 +123,8 @@ def main(argv: list[str] | None = None) -> None:
             auto_approve=args.auto_approve,
         )
         run = store.get_run(run_id)
+        if run is None:
+            raise RuntimeError(f"Run {run_id} was not persisted")
         print(json.dumps({"run_id": run_id, "status": run["status"]}, indent=2))
         return
 
@@ -117,12 +137,16 @@ def main(argv: list[str] | None = None) -> None:
             auto_approve_remaining=args.auto_approve_remaining,
         )
         run = store.get_run(run_id)
+        if run is None:
+            raise RuntimeError(f"Run {run_id} was not persisted")
         print(json.dumps({"run_id": run_id, "status": run["status"]}, indent=2))
         return
 
     if args.command == "runs":
         for run in store.list_runs():
-            print(f"{run['id']}  {run['status']:<20}  {run['agent_name']:<20}  {run['task']}")
+            print(
+                f"{run['id']}  {run['status']:<20}  {run['agent_name']:<20}  {run['task']}"
+            )
         return
 
     if args.command == "show":
@@ -135,7 +159,9 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "approvals":
-        print(json.dumps(store.list_approvals(args.run_id), indent=2, ensure_ascii=False))
+        print(
+            json.dumps(store.list_approvals(args.run_id), indent=2, ensure_ascii=False)
+        )
         return
 
     if args.command == "approve":

@@ -155,7 +155,10 @@ def _make_entry(
     truncated = False
     for line in diff_lines:
         addition = len(line) + (1 if rendered else 0)
-        if len(rendered) >= limits.max_diff_lines or rendered_chars + addition > limits.max_diff_chars:
+        if (
+            len(rendered) >= limits.max_diff_lines
+            or rendered_chars + addition > limits.max_diff_chars
+        ):
             truncated = True
             break
         rendered.append(line)

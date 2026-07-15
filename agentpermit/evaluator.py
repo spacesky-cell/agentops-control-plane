@@ -44,4 +44,3 @@ def run_eval(
         "failed": len(results) - passed_count,
         "results": results,
     }
-

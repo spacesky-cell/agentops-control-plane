@@ -104,8 +104,12 @@ class PolicyConfig:
     max_output_chars: int = 8000
 
     def __post_init__(self) -> None:
-        self._validate_command_rules("command_allow_prefixes", self.command_allow_prefixes)
-        self._validate_command_rules("command_deny_prefixes", self.command_deny_prefixes)
+        self._validate_command_rules(
+            "command_allow_prefixes", self.command_allow_prefixes
+        )
+        self._validate_command_rules(
+            "command_deny_prefixes", self.command_deny_prefixes
+        )
         self._validate_positive_int("max_command_seconds", self.max_command_seconds)
         self._validate_positive_int("max_output_chars", self.max_output_chars)
 
@@ -167,4 +171,3 @@ def write_default_policy(path: str | Path) -> None:
         json.dumps(asdict(PolicyConfig()), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-

@@ -11,7 +11,7 @@ from pathlib import Path
 from socket import socket as Socket
 from socketserver import ThreadingMixIn
 from threading import BoundedSemaphore, Thread
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse, urlsplit
 
 from .audit import ApprovalNotFoundError, ApprovalStateConflictError, AuditStore
@@ -44,7 +44,7 @@ def is_loopback_host(host: str) -> bool:
         return False
     try:
         return all(
-            ipaddress.ip_address(address[4][0].split("%", 1)[0]).is_loopback
+            ipaddress.ip_address(str(address[4][0]).split("%", 1)[0]).is_loopback
             for address in addresses
         )
     except ValueError:
@@ -71,7 +71,13 @@ def _normalize_authority(value: str) -> str | None:
         return None
     try:
         parsed = urlsplit(f"//{candidate}")
-        if parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+        if (
+            parsed.username
+            or parsed.password
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
             return None
         host = parsed.hostname
         port = parsed.port
@@ -84,7 +90,9 @@ def _normalize_authority(value: str) -> str | None:
 
 def _resolve_loopback_bind(host: str) -> tuple[int, str, set[str]]:
     if not host:
-        raise ValueError("Dashboard host must resolve only to loopback addresses: <empty>")
+        raise ValueError(
+            "Dashboard host must resolve only to loopback addresses: <empty>"
+        )
     try:
         addresses = socket.getaddrinfo(
             host,
@@ -93,16 +101,18 @@ def _resolve_loopback_bind(host: str) -> tuple[int, str, set[str]]:
             proto=socket.IPPROTO_TCP,
         )
     except socket.gaierror as exc:
-        raise ValueError(f"Dashboard host must resolve only to loopback addresses: {host}") from exc
+        raise ValueError(
+            f"Dashboard host must resolve only to loopback addresses: {host}"
+        ) from exc
     resolved: list[tuple[int, str]] = []
-    for family, _, _, _, sockaddr in addresses:
-        address = sockaddr[0].split("%", 1)[0]
+    for address_family, _, _, _, sockaddr in addresses:
+        address = str(sockaddr[0]).split("%", 1)[0]
         try:
             if not ipaddress.ip_address(address).is_loopback:
                 raise ValueError(
                     f"Dashboard host must resolve only to loopback addresses: {host}"
                 )
-            resolved.append((family, address))
+            resolved.append((int(address_family), address))
         except ValueError:
             raise ValueError(
                 f"Dashboard host must resolve only to loopback addresses: {host}"
@@ -121,12 +131,17 @@ class DashboardHTTPServer(ThreadingMixIn, HTTPServer):
     request_queue_size = 16
     max_workers = 16
     request_timeout = 10.0
+    allowed_authorities: set[str]
 
-    def __init__(self, server_address: tuple[object, ...], handler_class: type[BaseHTTPRequestHandler]):
+    def __init__(
+        self,
+        server_address: tuple[str | bytes | bytearray, int],
+        handler_class: type[BaseHTTPRequestHandler],
+    ):
         self._worker_slots = BoundedSemaphore(self.max_workers)
         super().__init__(server_address, handler_class)
 
-    def process_request(self, request: Socket, client_address: object) -> None:
+    def process_request(self, request: Socket, client_address: object) -> None:  # type: ignore[override]
         if not self._worker_slots.acquire(blocking=False):
             self.shutdown_request(request)
             return
@@ -250,10 +265,7 @@ class Dashboard:
                         reason,
                     )
                     return
-                if (
-                    len(reviewer) > MAX_REVIEWER_CHARS
-                    or len(reason) > MAX_REASON_CHARS
-                ):
+                if len(reviewer) > MAX_REVIEWER_CHARS or len(reason) > MAX_REASON_CHARS:
                     self._send_decision_error(
                         parsed.query,
                         approval_id,
@@ -306,7 +318,8 @@ class Dashboard:
                     return False
                 allowed = getattr(self.server, "allowed_authorities", None)
                 if allowed is None:
-                    bound_host, bound_port = self.server.server_address[:2]
+                    server_address = cast(tuple[Any, ...], self.server.server_address)
+                    bound_host, bound_port = server_address[:2]
                     allowed = {_format_authority(str(bound_host), int(bound_port))}
                 host = _normalize_authority(host_values[0])
                 if host is None or host not in allowed:
@@ -315,7 +328,11 @@ class Dashboard:
                 if origin is None:
                     return True
                 parsed = urlsplit(origin)
-                if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+                if (
+                    parsed.scheme not in {"http", "https"}
+                    or parsed.username
+                    or parsed.password
+                ):
                     return False
                 origin_authority = _normalize_authority(parsed.netloc)
                 return origin_authority is not None and origin_authority in allowed
@@ -414,7 +431,9 @@ class Dashboard:
 
 def serve(store: AuditStore, host: str, port: int) -> DashboardHTTPServer:
     family, bind_host, aliases = _resolve_loopback_bind(host)
-    server_class = _IPv6DashboardHTTPServer if family == socket.AF_INET6 else DashboardHTTPServer
+    server_class = (
+        _IPv6DashboardHTTPServer if family == socket.AF_INET6 else DashboardHTTPServer
+    )
     server = server_class((bind_host, port), Dashboard(store).app())
     server.allowed_authorities = {
         _format_authority(alias, server.server_port) for alias in aliases
@@ -672,7 +691,10 @@ def render_approval_rows(
 ) -> str:
     rows: list[str] = []
     for approval in approvals:
-        approval_id = int(approval["id"])
+        raw_approval_id = approval.get("id")
+        if not isinstance(raw_approval_id, int):
+            continue
+        approval_id = raw_approval_id
         run_id = str(approval["run_id"])
         payload = approval.get("payload")
         args = payload.get("args") if isinstance(payload, dict) else payload
@@ -733,7 +755,9 @@ def render_approval_actions(
     approve_action = f"/approvals/{approval_id}/approve?return_to={escaped_return}"
     reject_action = f"/approvals/{approval_id}/reject?return_to={escaped_return}"
     error_html = (
-        f"<div class='form-error' role='alert'>{html.escape(error)}</div>" if error else ""
+        f"<div class='form-error' role='alert'>{html.escape(error)}</div>"
+        if error
+        else ""
     )
     return (
         f"{error_html}<form class='approval-form' method='post' action='{approve_action}'>"
@@ -876,7 +900,9 @@ def _render_snapshot_diff(result: SnapshotDiff) -> str:
     for entry in result.entries:
         size = f"{entry.before_size if entry.before_size is not None else '-'} -> {entry.after_size if entry.after_size is not None else '-'} bytes"
         if entry.diff is None:
-            evidence = f"<span class='file-meta'>{html.escape(entry.display)}; {size}</span>"
+            evidence = (
+                f"<span class='file-meta'>{html.escape(entry.display)}; {size}</span>"
+            )
         else:
             evidence = f"<pre>{html.escape(entry.diff)}</pre>"
         rows.append(

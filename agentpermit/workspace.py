@@ -56,7 +56,9 @@ class _PathAccess:
 
 
 class WorkspaceManager:
-    def __init__(self, base_dir: str | Path, config: PolicyConfig | None = None) -> None:
+    def __init__(
+        self, base_dir: str | Path, config: PolicyConfig | None = None
+    ) -> None:
         self.base_dir = Path(base_dir)
         self.config = config or PolicyConfig()
         self.workspaces_dir = self.base_dir / "workspaces"
@@ -124,16 +126,16 @@ class WorkspaceManager:
         return self._trusted_root(workspace).identity
 
     @contextmanager
-    def command_cwd_lease(
-        self, workspace: str | Path
-    ) -> Iterator[CommandCwdLease]:
+    def command_cwd_lease(self, workspace: str | Path) -> Iterator[CommandCwdLease]:
         root = self._trusted_root(workspace)
         with self._directory_lease(root) as lease:
             if os.name == "nt":
                 yield CommandCwdLease(str(root.path))
                 return
             if lease.fd is None:
-                raise WorkspaceIntegrityError("Workspace command lease has no directory fd.")
+                raise WorkspaceIntegrityError(
+                    "Workspace command lease has no directory fd."
+                )
             fd_path = self._fd_directory_path(lease.fd)
             yield CommandCwdLease(fd_path, (lease.fd,))
 
@@ -183,7 +185,9 @@ class WorkspaceManager:
             self._rmdir_child(storage, path.name, path)
             self._trusted_roots.pop(path, None)
 
-    def list_files(self, workspace: str | Path, pattern: str | None = None) -> list[str]:
+    def list_files(
+        self, workspace: str | Path, pattern: str | None = None
+    ) -> list[str]:
         files: list[str] = []
 
         def collect(relative: Path, _content: bytes | None) -> None:
@@ -250,17 +254,12 @@ class WorkspaceManager:
                     raise WorkspaceIntegrityError(
                         f"Snapshot destination changed during access: {archive}"
                     )
-                self._replace_child(
-                    storage, temp_name, archive_name, temp_identity
-                )
+                self._replace_child(storage, temp_name, archive_name, temp_identity)
                 temp_created = False
                 try:
                     self._verify_directory_binding(storage)
                     promoted = self._stat_child(storage, archive_name)
-                    if (
-                        promoted is None
-                        or self._identity(promoted) != temp_identity
-                    ):
+                    if promoted is None or self._identity(promoted) != temp_identity:
                         raise WorkspaceIntegrityError(
                             f"Snapshot promotion identity changed: {archive}"
                         )
@@ -313,7 +312,9 @@ class WorkspaceManager:
         with self._leased_path(workspace, relative) as access:
             return self._decode_text(self._read_access(access))
 
-    def write_text(self, workspace: str | Path, relative: str, content: str) -> str | None:
+    def write_text(
+        self, workspace: str | Path, relative: str, content: str
+    ) -> str | None:
         with self._leased_path(workspace, relative, create_parents=True) as access:
             encoded = self._encode_text(content)
             if access.target_identity is None:
@@ -441,7 +442,9 @@ class WorkspaceManager:
                 raise WorkspaceIntegrityError(
                     f"Path changed during access: {child_path}"
                 )
-            if self.is_protected(child_relative) or self._is_link_or_reparse(child_stat):
+            if self.is_protected(child_relative) or self._is_link_or_reparse(
+                child_stat
+            ):
                 continue
             current = self._stat_child(directory, name)
             if current is None or self._identity(current) != self._identity(child_stat):
@@ -482,9 +485,7 @@ class WorkspaceManager:
                     lease, Path(), change_prefix="Source file changed during copy"
                 )
             )
-            self._copy_source_directory(
-                lease, Path(), workspace, protected_identities
-            )
+            self._copy_source_directory(lease, Path(), workspace, protected_identities)
 
     def _copy_source_directory(
         self,
@@ -648,21 +649,17 @@ class WorkspaceManager:
         opened = self._identity(opened_stat)
         expected = access.target_identity
         if expected is not None and opened != expected:
-            raise WorkspaceIntegrityError(
-                f"Path changed during access: {access.path}"
-            )
+            raise WorkspaceIntegrityError(f"Path changed during access: {access.path}")
         current = self._stat_child(access.parent, access.path.name)
         if current is None or self._identity(current) != opened:
-            raise WorkspaceIntegrityError(
-                f"Path changed during access: {access.path}"
-            )
+            raise WorkspaceIntegrityError(f"Path changed during access: {access.path}")
         self._require_single_link(opened_stat, access.path)
         if opened in access.protected_identities:
-            raise ValueError(f"Protected hardlink alias is not accessible: {access.path}")
-        if expected is None and not allow_created:
-            raise WorkspaceIntegrityError(
-                f"Path changed during access: {access.path}"
+            raise ValueError(
+                f"Protected hardlink alias is not accessible: {access.path}"
             )
+        if expected is None and not allow_created:
+            raise WorkspaceIntegrityError(f"Path changed during access: {access.path}")
 
     def _verify_directory_binding(self, directory: _DirectoryLease) -> None:
         try:
@@ -689,9 +686,7 @@ class WorkspaceManager:
             os.unlink(access.path.name, dir_fd=access.parent.fd)
 
     @contextmanager
-    def _directory_lease(
-        self, state: _DirectoryState
-    ) -> Iterator[_DirectoryLease]:
+    def _directory_lease(self, state: _DirectoryState) -> Iterator[_DirectoryLease]:
         if os.name == "nt":
             handle = self._win_open_directory(state.path)
             try:
@@ -757,17 +752,13 @@ class WorkspaceManager:
             child_path = directory.state.path / name
             child_stat = self._stat_child(directory, name)
             if child_stat is None:
-                raise WorkspaceIntegrityError(
-                    f"{change_prefix}: {child_path}"
-                )
+                raise WorkspaceIntegrityError(f"{change_prefix}: {child_path}")
             if self._is_link_or_reparse(child_stat):
                 continue
             protected_path = self.is_protected(child_relative)
             current = self._stat_child(directory, name)
             if current is None or self._identity(current) != self._identity(child_stat):
-                raise WorkspaceIntegrityError(
-                    f"{change_prefix}: {child_path}"
-                )
+                raise WorkspaceIntegrityError(f"{change_prefix}: {child_path}")
             if stat.S_ISDIR(child_stat.st_mode):
                 state = _DirectoryState(child_path, self._identity(child_stat))
                 with self._directory_lease(state) as child:
@@ -810,9 +801,7 @@ class WorkspaceManager:
         with os.scandir(target) as iterator:
             return sorted(entry.name for entry in iterator)
 
-    def _stat_child(
-        self, parent: _DirectoryLease, name: str
-    ) -> os.stat_result | None:
+    def _stat_child(self, parent: _DirectoryLease, name: str) -> os.stat_result | None:
         try:
             if parent.fd is not None:
                 return os.stat(name, dir_fd=parent.fd, follow_symlinks=False)
@@ -851,9 +840,7 @@ class WorkspaceManager:
             raise
         return self._identity(created)
 
-    def _unlink_child(
-        self, parent: _DirectoryLease, name: str, path: Path
-    ) -> None:
+    def _unlink_child(self, parent: _DirectoryLease, name: str, path: Path) -> None:
         try:
             if parent.fd is not None:
                 os.unlink(name, dir_fd=parent.fd)
@@ -875,9 +862,7 @@ class WorkspaceManager:
         self._unlink_child(parent, name, path)
         return True
 
-    def _rmdir_child(
-        self, parent: _DirectoryLease, name: str, path: Path
-    ) -> None:
+    def _rmdir_child(self, parent: _DirectoryLease, name: str, path: Path) -> None:
         if parent.fd is not None:
             os.rmdir(name, dir_fd=parent.fd)
         else:
@@ -892,10 +877,7 @@ class WorkspaceManager:
     ) -> None:
         self._verify_directory_binding(parent)
         source = self._stat_child(parent, source_name)
-        if (
-            source is None
-            or self._identity(source) != expected_source_identity
-        ):
+        if source is None or self._identity(source) != expected_source_identity:
             raise WorkspaceIntegrityError(
                 f"Snapshot temp entry changed: {parent.state.path / source_name}"
             )
@@ -916,9 +898,7 @@ class WorkspaceManager:
     @staticmethod
     def _require_single_link(file_stat: os.stat_result, path: Path) -> None:
         if stat.S_ISREG(file_stat.st_mode) and file_stat.st_nlink != 1:
-            raise ValueError(
-                f"Governed regular file has multiple hardlinks: {path}"
-            )
+            raise ValueError(f"Governed regular file has multiple hardlinks: {path}")
 
     def _require_snapshot_destination(
         self, path: Path, file_stat: os.stat_result | None

@@ -16,7 +16,9 @@ from agentpermit.models import ToolRequest
 def make_sample_repo(root: Path) -> Path:
     source = root / "sample_repo"
     source.mkdir()
-    (source / "math_utils.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    (source / "math_utils.py").write_text(
+        "def add(a, b):\n    return a - b\n", encoding="utf-8"
+    )
     (source / "test_math_utils.py").write_text(
         "\n".join(
             [
@@ -45,7 +47,11 @@ def test_scripted_agent_runs_in_isolated_workspace(tmp_path):
             {"tool": "read_file", "args": {"path": "math_utils.py"}},
             {
                 "tool": "patch_text",
-                "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+                "args": {
+                    "path": "math_utils.py",
+                    "old": "return a - b",
+                    "new": "return a + b",
+                },
             },
             {
                 "tool": "run_command",
@@ -94,7 +100,12 @@ def test_gateway_denies_non_mapping_structured_command_args_without_raising(tmp_
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     run_id, workspace = gateway.start_run("malformed command", "test-agent")
 
-    for malformed_args in (None, 42, "python -m unittest", ["python", "-m", "unittest"]):
+    for malformed_args in (
+        None,
+        42,
+        "python -m unittest",
+        ["python", "-m", "unittest"],
+    ):
         result = gateway.execute_tool(
             run_id,
             workspace,
@@ -114,7 +125,11 @@ def test_scripted_agent_pauses_without_auto_approval(tmp_path):
         steps=[
             {
                 "tool": "patch_text",
-                "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+                "args": {
+                    "path": "math_utils.py",
+                    "old": "return a - b",
+                    "new": "return a + b",
+                },
             },
             {
                 "tool": "run_command",
@@ -140,7 +155,11 @@ def test_scripted_agent_resumes_after_approval(tmp_path):
             {"tool": "read_file", "args": {"path": "math_utils.py"}},
             {
                 "tool": "patch_text",
-                "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+                "args": {
+                    "path": "math_utils.py",
+                    "old": "return a - b",
+                    "new": "return a + b",
+                },
             },
             {
                 "tool": "run_command",
@@ -151,7 +170,9 @@ def test_scripted_agent_resumes_after_approval(tmp_path):
 
     run_id = agent.run(gateway, "fix sample repo", source=source, auto_approve=False)
     approval = gateway.audit_store.list_approvals(run_id)[0]
-    gateway.audit_store.decide_approval(approval["id"], "approved", "reviewer", "Looks safe")
+    gateway.audit_store.decide_approval(
+        approval["id"], "approved", "reviewer", "Looks safe"
+    )
     agent.resume(gateway, run_id, approver="reviewer")
     run = gateway.audit_store.get_run(run_id)
     events = gateway.audit_store.get_events(run_id)
@@ -188,7 +209,16 @@ def test_resume_fails_closed_if_run_finishes_after_approval_read(tmp_path, monke
     run = gateway.audit_store.get_run(run_id)
     assert run["status"] == "failed"
     assert not (Path(run["workspace_path"]) / "notes.txt").exists()
-    assert len([event for event in gateway.audit_store.get_events(run_id) if event["type"] == "run_finished"]) == 1
+    assert (
+        len(
+            [
+                event
+                for event in gateway.audit_store.get_events(run_id)
+                if event["type"] == "run_finished"
+            ]
+        )
+        == 1
+    )
 
 
 def test_concurrent_resume_allows_only_one_execution(tmp_path):
@@ -217,9 +247,20 @@ def test_concurrent_resume_allows_only_one_execution(tmp_path):
         results = list(pool.map(resume_once, range(2)))
 
     assert results.count("ok") == 1
-    assert any("not waiting for approval" in result for result in results if result != "ok")
+    assert any(
+        "not waiting for approval" in result for result in results if result != "ok"
+    )
     assert gateway.audit_store.get_run(run_id)["status"] == "success"
-    assert len([event for event in gateway.audit_store.get_events(run_id) if event["type"] == "run_finished"]) == 1
+    assert (
+        len(
+            [
+                event
+                for event in gateway.audit_store.get_events(run_id)
+                if event["type"] == "run_finished"
+            ]
+        )
+        == 1
+    )
 
 
 def test_duplicate_finish_preserves_winning_snapshot_and_cleans_loser(tmp_path):
@@ -245,7 +286,9 @@ def test_duplicate_finish_preserves_winning_snapshot_and_cleans_loser(tmp_path):
     with zipfile.ZipFile(winner_snapshot) as archive:
         assert archive.read("state.txt") == b"state-one"
     assert not any(
-        path.is_file() and path != winner_snapshot and path.name.startswith(f"{run_id}-after-")
+        path.is_file()
+        and path != winner_snapshot
+        and path.name.startswith(f"{run_id}-after-")
         for path in gateway.workspace_manager.snapshots_dir.iterdir()
     )
 
@@ -289,7 +332,11 @@ def test_scripted_agent_does_not_resume_after_rejection(tmp_path):
         steps=[
             {
                 "tool": "patch_text",
-                "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+                "args": {
+                    "path": "math_utils.py",
+                    "old": "return a - b",
+                    "new": "return a + b",
+                },
             },
             {
                 "tool": "run_command",
@@ -300,14 +347,18 @@ def test_scripted_agent_does_not_resume_after_rejection(tmp_path):
 
     run_id = agent.run(gateway, "fix sample repo", source=source, auto_approve=False)
     approval = gateway.audit_store.list_approvals(run_id)[0]
-    gateway.audit_store.decide_approval(approval["id"], "rejected", "reviewer", "Too risky")
+    gateway.audit_store.decide_approval(
+        approval["id"], "rejected", "reviewer", "Too risky"
+    )
 
     try:
         agent.resume(gateway, run_id, approver="reviewer")
     except ValueError as exc:
         assert "not waiting for approval: failed" in str(exc)
     else:
-        raise AssertionError("resume should reject runs without an approved pending action")
+        raise AssertionError(
+            "resume should reject runs without an approved pending action"
+        )
 
     run = gateway.audit_store.get_run(run_id)
     assert run["status"] == "failed"
@@ -326,18 +377,28 @@ def test_scripted_agent_requires_approval_for_each_pending_action(tmp_path):
         steps=[
             {
                 "tool": "patch_text",
-                "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+                "args": {
+                    "path": "math_utils.py",
+                    "old": "return a - b",
+                    "new": "return a + b",
+                },
             },
             {
                 "tool": "patch_text",
-                "args": {"path": "math_utils.py", "old": "return a + b", "new": "return a - b"},
+                "args": {
+                    "path": "math_utils.py",
+                    "old": "return a + b",
+                    "new": "return a - b",
+                },
             },
         ],
     )
 
     run_id = agent.run(gateway, "two approvals", source=source, auto_approve=False)
     first_approval = gateway.audit_store.list_approvals(run_id)[0]
-    gateway.audit_store.decide_approval(first_approval["id"], "approved", "reviewer", "First patch")
+    gateway.audit_store.decide_approval(
+        first_approval["id"], "approved", "reviewer", "First patch"
+    )
     agent.resume(gateway, run_id, approver="reviewer")
 
     run = gateway.audit_store.get_run(run_id)
@@ -350,7 +411,9 @@ def test_scripted_agent_requires_approval_for_each_pending_action(tmp_path):
     except ValueError as exc:
         assert "approved pending action" in str(exc)
     else:
-        raise AssertionError("resume should require approval for the current pending action")
+        raise AssertionError(
+            "resume should require approval for the current pending action"
+        )
 
     run = gateway.audit_store.get_run(run_id)
     assert run["status"] == "waiting_for_approval"
@@ -381,16 +444,22 @@ def test_approval_fingerprint_uses_full_unredacted_request(tmp_path):
         ],
     )
 
-    run_id = original_agent.run(gateway, "write notes", source=source, auto_approve=False)
+    run_id = original_agent.run(
+        gateway, "write notes", source=source, auto_approve=False
+    )
     approval = gateway.audit_store.list_approvals(run_id)[0]
-    gateway.audit_store.decide_approval(approval["id"], "approved", "reviewer", "Original write")
+    gateway.audit_store.decide_approval(
+        approval["id"], "approved", "reviewer", "Original write"
+    )
 
     try:
         changed_agent.resume(gateway, run_id, approver="reviewer")
     except ValueError as exc:
         assert "approved pending action" in str(exc)
     else:
-        raise AssertionError("resume should reject an approval for a different full request")
+        raise AssertionError(
+            "resume should reject an approval for a different full request"
+        )
 
     workspace = Path(gateway.audit_store.get_run(run_id)["workspace_path"])
     assert not (workspace / "notes.txt").exists()
@@ -401,7 +470,9 @@ def test_snapshots_include_workspace_files(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
 
     run_id, workspace = gateway.start_run("snapshot sample repo", "test-agent", source)
-    before_snapshot = tmp_path / "project" / ".agentpermit" / "snapshots" / f"{run_id}-before.zip"
+    before_snapshot = (
+        tmp_path / "project" / ".agentpermit" / "snapshots" / f"{run_id}-before.zip"
+    )
 
     with zipfile.ZipFile(before_snapshot) as archive:
         assert "math_utils.py" in archive.namelist()
@@ -474,7 +545,9 @@ def test_fresh_gateway_rejects_replaced_workspace_root(tmp_path):
     fresh = RuntimeGateway.from_home(home)
 
     with pytest.raises(ValueError, match="authoritative workspace identity"):
-        fresh.execute_tool(run_id, workspace, ToolRequest("read_file", {"path": "safe.txt"}))
+        fresh.execute_tool(
+            run_id, workspace, ToolRequest("read_file", {"path": "safe.txt"})
+        )
 
     assert (workspace / "safe.txt").read_text(encoding="utf-8") == "replacement-secret"
 
@@ -561,7 +634,9 @@ def test_audit_store_persists_run_metadata(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     run_id, _workspace = gateway.start_run("metadata run", "test-agent")
 
-    gateway.audit_store.set_run_metadata(run_id, {"transport": "mcp", "task": "metadata run"})
+    gateway.audit_store.set_run_metadata(
+        run_id, {"transport": "mcp", "task": "metadata run"}
+    )
 
     assert gateway.audit_store.get_run_metadata(run_id) == {
         "transport": "mcp",
@@ -588,7 +663,11 @@ def test_waiting_for_approval_keeps_run_open(tmp_path):
         steps=[
             {
                 "tool": "patch_text",
-                "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+                "args": {
+                    "path": "math_utils.py",
+                    "old": "return a - b",
+                    "new": "return a + b",
+                },
             }
         ],
     )
@@ -614,7 +693,9 @@ def test_read_file_audit_uses_hash_not_full_content(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
     run_id, workspace = gateway.start_run("read audit", "test-agent", source)
 
-    result = gateway.execute_tool(run_id, workspace, ToolRequest("read_file", {"path": "notes.txt"}))
+    result = gateway.execute_tool(
+        run_id, workspace, ToolRequest("read_file", {"path": "notes.txt"})
+    )
     events = gateway.audit_store.get_events(run_id)
     tool_event = [event for event in events if event["type"] == "tool_executed"][-1]
 
@@ -634,12 +715,16 @@ def test_deciding_unknown_approval_raises_not_found(tmp_path):
     except ApprovalNotFoundError as exc:
         assert "Approval not found: 999" in str(exc)
     else:
-        raise AssertionError("deciding an unknown approval should raise ApprovalNotFoundError")
+        raise AssertionError(
+            "deciding an unknown approval should raise ApprovalNotFoundError"
+        )
 
 
 def test_deciding_non_pending_approval_raises_conflict(tmp_path):
     gateway = RuntimeGateway.from_home(tmp_path / "project")
-    run_id = gateway.audit_store.start_run("approval state", "test-agent", tmp_path / "workspace")
+    run_id = gateway.audit_store.start_run(
+        "approval state", "test-agent", tmp_path / "workspace"
+    )
     approval_id = gateway.audit_store.create_approval(
         run_id,
         "patch_text",
@@ -649,7 +734,9 @@ def test_deciding_non_pending_approval_raises_conflict(tmp_path):
     gateway.audit_store.decide_approval(approval_id, "rejected", "reviewer", "No")
 
     try:
-        gateway.audit_store.decide_approval(approval_id, "approved", "reviewer", "Changed mind")
+        gateway.audit_store.decide_approval(
+            approval_id, "approved", "reviewer", "Changed mind"
+        )
     except ValueError as exc:
         assert "not pending" in str(exc)
     else:
@@ -657,3 +744,36 @@ def test_deciding_non_pending_approval_raises_conflict(tmp_path):
 
     approval = gateway.audit_store.list_approvals(run_id)[0]
     assert approval["status"] == "rejected"
+
+
+def test_gateway_rejects_missing_and_non_authoritative_workspaces(tmp_path):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    with pytest.raises(ValueError, match="Run not found"):
+        gateway.resume_workspace("missing")
+    run_id, workspace = gateway.start_run("task", "agent")
+    with pytest.raises(ValueError, match="does not match authoritative"):
+        gateway._verified_workspace(run_id, tmp_path / "other")
+    assert gateway._verified_workspace(run_id, workspace) == workspace
+
+
+def test_gateway_records_cleanup_failure_when_startup_fails(tmp_path, monkeypatch):
+    gateway = RuntimeGateway.from_home(tmp_path / "project")
+    workspace = tmp_path / "workspace"
+    monkeypatch.setattr(
+        gateway.workspace_manager, "create", lambda run_id, source: workspace
+    )
+    monkeypatch.setattr(
+        gateway.workspace_manager, "workspace_identity", lambda path: (1, 2)
+    )
+    monkeypatch.setattr(
+        gateway.audit_store,
+        "activate_run_workspace",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("activation failed")),
+    )
+    monkeypatch.setattr(
+        gateway.workspace_manager,
+        "remove_workspace",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("cleanup failed")),
+    )
+    with pytest.raises(RuntimeError, match="activation failed"):
+        gateway.start_run("task", "agent")

@@ -25,7 +25,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Optional glob pattern. Defaults to **/*."},
+                "pattern": {
+                    "type": "string",
+                    "description": "Optional glob pattern. Defaults to **/*.",
+                },
             },
             "required": [],
             "additionalProperties": False,
@@ -37,7 +40,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Workspace-relative file path."},
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative file path.",
+                },
             },
             "required": ["path"],
             "additionalProperties": False,
@@ -49,7 +55,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Workspace-relative file path."},
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative file path.",
+                },
                 "content": {"type": "string", "description": "New file content."},
             },
             "required": ["path", "content"],
@@ -62,7 +71,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Workspace-relative file path."},
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative file path.",
+                },
                 "old": {"type": "string", "description": "Existing text to replace."},
                 "new": {"type": "string", "description": "Replacement text."},
             },
@@ -76,7 +88,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "program": {"type": "string", "description": "Executable name or path."},
+                "program": {
+                    "type": "string",
+                    "description": "Executable name or path.",
+                },
                 "args": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -99,7 +114,9 @@ class ToolExecutor:
     _TERM_GRACE_SECONDS = 0.1
     _WINDOWS_SCRIPT_SUFFIXES = frozenset({".bat", ".cmd", ".ps1"})
 
-    def __init__(self, workspace_manager: WorkspaceManager, config: PolicyConfig) -> None:
+    def __init__(
+        self, workspace_manager: WorkspaceManager, config: PolicyConfig
+    ) -> None:
         self.workspace_manager = workspace_manager
         self.config = config
 
@@ -109,7 +126,9 @@ class ToolExecutor:
         if tool_name == "read_file":
             return self.read_file(workspace, str(args["path"]))
         if tool_name == "write_file":
-            return self.write_file(workspace, str(args["path"]), str(args.get("content", "")))
+            return self.write_file(
+                workspace, str(args["path"]), str(args.get("content", ""))
+            )
         if tool_name == "patch_text":
             return self.patch_text(
                 workspace,
@@ -128,7 +147,9 @@ class ToolExecutor:
     def read_file(self, workspace: Path, relative: str) -> str:
         return self.workspace_manager.read_text(workspace, relative)
 
-    def write_file(self, workspace: Path, relative: str, content: str) -> dict[str, Any]:
+    def write_file(
+        self, workspace: Path, relative: str, content: str
+    ) -> dict[str, Any]:
         before = self.workspace_manager.write_text(workspace, relative, content)
         return {
             "path": relative,
@@ -137,10 +158,10 @@ class ToolExecutor:
             "after_chars": len(content),
         }
 
-    def patch_text(self, workspace: Path, relative: str, old: str, new: str) -> dict[str, Any]:
-        text, updated = self.workspace_manager.patch_text(
-            workspace, relative, old, new
-        )
+    def patch_text(
+        self, workspace: Path, relative: str, old: str, new: str
+    ) -> dict[str, Any]:
+        text, updated = self.workspace_manager.patch_text(workspace, relative, old, new)
         return {
             "path": relative,
             "before_chars": len(text),
@@ -268,9 +289,7 @@ class ToolExecutor:
             return self._resolve_windows_node_adapter(program, args, search_path)
         if requested.is_absolute() or requested.parent != Path("."):
             candidate = (
-                requested
-                if requested.is_absolute()
-                else Path(cwd or ".") / requested
+                requested if requested.is_absolute() else Path(cwd or ".") / requested
             )
             resolved = self._canonical_file(candidate, "Command program")
         else:
@@ -282,7 +301,9 @@ class ToolExecutor:
             os.name == "nt"
             and Path(resolved).suffix.lower() in self._WINDOWS_SCRIPT_SUFFIXES
         ):
-            raise ValueError("Windows batch and script programs are not executable tools.")
+            raise ValueError(
+                "Windows batch and script programs are not executable tools."
+            )
         return resolved, list(args)
 
     def _resolve_windows_node_adapter(
@@ -355,12 +376,16 @@ class ToolExecutor:
                     "Windows batch or script program paths cannot end in space or dot."
                 )
             if ":" in component:
-                raise ValueError("Windows alternate data stream programs are not allowed.")
+                raise ValueError(
+                    "Windows alternate data stream programs are not allowed."
+                )
             stem = component.split(".", 1)[0].lower()
             if (
                 stem in reserved
-                or stem.startswith("com") and stem[3:].isdigit()
-                or stem.startswith("lpt") and stem[3:].isdigit()
+                or stem.startswith("com")
+                and stem[3:].isdigit()
+                or stem.startswith("lpt")
+                and stem[3:].isdigit()
             ):
                 raise ValueError("Windows device program names are not allowed.")
 
@@ -460,7 +485,9 @@ class ToolExecutor:
                 job.terminate()
             except OSError:
                 self._taskkill_fallback(process.pid)
-            if process.poll() is None and not self._wait_process_until(process, deadline):
+            if process.poll() is None and not self._wait_process_until(
+                process, deadline
+            ):
                 process.kill()
                 self._wait_process_until(process, deadline)
             return
@@ -490,15 +517,21 @@ class ToolExecutor:
         self, process: subprocess.Popen[str], deadline: float | None = None
     ) -> None:
         deadline = deadline or (time.monotonic() + self._KILL_GRACE_SECONDS)
+        killpg = getattr(os, "killpg", None)
+        sigterm = getattr(signal, "SIGTERM", None)
+        sigkill = getattr(signal, "SIGKILL", None)
+        if killpg is None or sigterm is None or sigkill is None:
+            self._wait_process_until(process, deadline)
+            return
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            killpg(process.pid, sigterm)
         except ProcessLookupError:
             pass
         threading.Event().wait(
             max(0.0, min(self._TERM_GRACE_SECONDS, deadline - time.monotonic()))
         )
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            killpg(process.pid, sigkill)
         except ProcessLookupError:
             pass
         self._wait_process_until(process, deadline)
@@ -683,16 +716,13 @@ class _WindowsJob:
         if not process_handle:
             raise ctypes.WinError(ctypes.get_last_error())
         try:
-            if not self._kernel32.AssignProcessToJobObject(
-                self.handle, process_handle
-            ):
+            if not self._kernel32.AssignProcessToJobObject(self.handle, process_handle):
                 raise ctypes.WinError(ctypes.get_last_error())
             self.assigned = True
             status = self._ntdll.NtResumeProcess(process_handle)
             if status < 0:
                 raise OSError(
-                    "NtResumeProcess failed with NTSTATUS "
-                    f"0x{status & 0xFFFFFFFF:08X}"
+                    f"NtResumeProcess failed with NTSTATUS 0x{status & 0xFFFFFFFF:08X}"
                 )
         finally:
             self._kernel32.CloseHandle(process_handle)
@@ -735,4 +765,3 @@ class _BoundedOutput:
                 return value
             marker = self._TRUNCATION_MARKER[: self.max_chars]
             return value[: self.max_chars - len(marker)] + marker
-

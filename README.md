@@ -121,10 +121,16 @@ AgentPermit binds its dashboard to loopback and is intended for one local user. 
 
 ```powershell
 python -m pip install -e ".[dev]"
-python -m pytest -q
+ruff format --check agentpermit tests scripts
+ruff check agentpermit tests scripts
+mypy --no-incremental agentpermit
+python -m pytest --cov=agentpermit --cov-report=term-missing --cov-fail-under=90
 python -m build
 npm test
 npm pack --dry-run
+python -m agentpermit --home .eval eval --tasks examples/tasks.jsonl --auto-approve
+python scripts/validate_release.py --tag v0.2.0
+git diff --check
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for changes, tests, and disclosure expectations. The project is MIT licensed; see [LICENSE](LICENSE).

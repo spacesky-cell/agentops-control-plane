@@ -94,11 +94,18 @@ class McpStdioSession:
             approval = self._pending_approval()
             if approval is not None and str(approval["status"]) == "rejected":
                 self._finish_failed()
-            elif approval is None or str(approval["status"]) not in {"pending", "approved"}:
+            elif approval is None or str(approval["status"]) not in {
+                "pending",
+                "approved",
+            }:
                 self._finish_failed()
             self._finalized = True
             return
-        status = "failed" if transport_failed or self._terminal_status == "failed" else "success"
+        status = (
+            "failed"
+            if transport_failed or self._terminal_status == "failed"
+            else "success"
+        )
         try:
             self.gateway.finish_run(self.run_id, self.workspace, status)
         finally:
@@ -117,7 +124,9 @@ class McpStdioSession:
         if not isinstance(request, dict):
             return None
         request_id = request.get("id")
-        if isinstance(request_id, str) or (isinstance(request_id, int) and not isinstance(request_id, bool)):
+        if isinstance(request_id, str) or (
+            isinstance(request_id, int) and not isinstance(request_id, bool)
+        ):
             return request_id
         return None
 
@@ -139,7 +148,9 @@ class McpStdioSession:
         if "id" not in request or request["id"] is None:
             raise JsonRpcError(-32600, "Invalid Request: id is required.")
         request_id = request["id"]
-        if isinstance(request_id, str) or (isinstance(request_id, int) and not isinstance(request_id, bool)):
+        if isinstance(request_id, str) or (
+            isinstance(request_id, int) and not isinstance(request_id, bool)
+        ):
             return request_id
         raise JsonRpcError(-32600, "Invalid Request: id must be a string or integer.")
 
@@ -163,7 +174,11 @@ class McpStdioSession:
     def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         self.initialize_requested = True
         requested_version = str(params.get("protocolVersion") or PROTOCOL_VERSION)
-        protocol_version = requested_version if requested_version == PROTOCOL_VERSION else PROTOCOL_VERSION
+        protocol_version = (
+            requested_version
+            if requested_version == PROTOCOL_VERSION
+            else PROTOCOL_VERSION
+        )
         return {
             "protocolVersion": protocol_version,
             "capabilities": {
@@ -193,7 +208,9 @@ class McpStdioSession:
             requested_by=self.agent_name,
         )
         run = self.gateway.audit_store.get_run(self.run_id)
-        if self._terminal_status == "failed" or (run is not None and run["status"] == "failed"):
+        if self._terminal_status == "failed" or (
+            run is not None and run["status"] == "failed"
+        ):
             return {
                 "status": ToolStatus.FAILED.value,
                 "ok": False,
@@ -342,19 +359,28 @@ class McpStdioSession:
             return self._tool_error("Invalid tools/call params: name is required.")
         arguments = params.get("arguments", {})
         if not isinstance(arguments, dict):
-            return self._tool_error("Invalid tools/call params: arguments must be an object.")
+            return self._tool_error(
+                "Invalid tools/call params: arguments must be an object."
+            )
         validation_error = self._validate_tool_arguments(name, arguments)
         if validation_error is not None:
             return self._tool_error(validation_error)
         payload = self._call_tool(params)
         if payload["ok"]:
             return {
-                "content": [{"type": "text", "text": self._stringify_tool_output(payload["output"])}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": self._stringify_tool_output(payload["output"]),
+                    }
+                ],
                 "isError": False,
             }
         message = payload.get("error") or payload["status"]
         if payload.get("approval_id") is not None:
-            message = f"{payload['status']}: {message} approval_id={payload['approval_id']}"
+            message = (
+                f"{payload['status']}: {message} approval_id={payload['approval_id']}"
+            )
         else:
             message = f"{payload['status']}: {message}"
         return {"content": [{"type": "text", "text": message}], "isError": True}
@@ -362,7 +388,9 @@ class McpStdioSession:
     def _tool_error(self, message: str) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": message}], "isError": True}
 
-    def _validate_tool_arguments(self, name: str, arguments: dict[str, Any]) -> str | None:
+    def _validate_tool_arguments(
+        self, name: str, arguments: dict[str, Any]
+    ) -> str | None:
         definitions = {tool["name"]: tool for tool in list_tool_definitions()}
         tool = definitions.get(name)
         if tool is None:
@@ -419,10 +447,15 @@ def serve_json_lines(
         for line in input_stream:
             if not line.strip():
                 continue
+            response: dict[str, Any] | None
             try:
                 request = json.loads(line)
             except json.JSONDecodeError:
-                response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error."}}
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32700, "message": "Parse error."},
+                }
             else:
                 response = session.handle(request)
             if response is None:

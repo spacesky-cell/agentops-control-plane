@@ -9,32 +9,94 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: ruff format --check agentpermit tests scripts
+      - run: ruff check agentpermit tests scripts
+      - run: mypy --no-incremental agentpermit
+      - run: python -m pytest --cov=agentpermit --cov-report=term-missing --cov-fail-under=90
+
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  node:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: npm test
+
+  launcher:
+    name: Installed launcher on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12"]
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
+      - run: npm pack --dry-run
+      - shell: bash
+        run: echo "TARBALL=$(npm pack --silent)" >> "$GITHUB_ENV"
+      - run: node scripts/smoke_npm_artifact.mjs "${{ env.TARBALL }}"
 
-      - name: Install package
-        run: python -m pip install -e ".[dev]"
-
-      - name: Build package
-        run: python -m build
-
-      - name: Run tests
-        run: python -m pytest -q
-
-      - name: Run deterministic eval
-        run: python -m agentpermit eval --tasks examples/tasks.jsonl --auto-approve
+  package:
+    name: Build, eval, and validate packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m build
+      - run: npm pack --dry-run
+      - shell: bash
+        run: echo "TARBALL=$(npm pack --silent)" >> "$GITHUB_ENV"
+      - run: python -m agentpermit --home "${{ runner.temp }}/eval" eval --tasks examples/tasks.jsonl --auto-approve
+      - run: >-
+          python scripts/validate_release.py
+          --tag v$(node -p "require('./package.json').version")
+          --npm-tgz "${{ env.TARBALL }}"
+          --wheel dist/agentpermit-*.whl
+          --sdist dist/agentpermit-*.tar.gz
+      - run: node scripts/smoke_npm_artifact.mjs "${{ env.TARBALL }}"

@@ -26,10 +26,15 @@ AgentPermit has no runtime Python dependencies and the npm package has no JavaSc
 Run the checks relevant to your change, with the full baseline before requesting review:
 
 ```powershell
-python -m pytest -q
+ruff format --check agentpermit tests scripts
+ruff check agentpermit tests scripts
+mypy --no-incremental agentpermit
+python -m pytest --cov=agentpermit --cov-report=term-missing --cov-fail-under=90
 python -m build
 npm test
 npm pack --dry-run
+python -m agentpermit --home .eval eval --tasks examples/tasks.jsonl --auto-approve
+python scripts/validate_release.py --tag v0.2.0
 git diff --check
 ```
 

@@ -1,19 +1,21 @@
 from __future__ import annotations
 
+import socket
 import zipfile
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 from urllib.parse import urlencode
 
 import pytest
 
+import agentpermit.web as web_module
 from agentpermit.audit import AuditStore
 from agentpermit.snapshot_diff import DiffLimits, compare_snapshot_archives
 from agentpermit.web import (
     Dashboard,
     DashboardHTTPServer,
+    _resolve_loopback_bind,
     is_loopback_host,
     render_approvals,
     render_index,
@@ -32,12 +34,18 @@ def request_once(
     form: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, str], str]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Dashboard(store, csrf_token=token).app())
+    server = DashboardHTTPServer(
+        ("127.0.0.1", 0), Dashboard(store, csrf_token=token).app()
+    )
     thread = Thread(target=server.handle_request)
     thread.start()
     conn = HTTPConnection("127.0.0.1", server.server_port)
     body = urlencode(form).encode("utf-8") if form is not None else None
-    request_headers = {"Content-Type": "application/x-www-form-urlencoded"} if body is not None else {}
+    request_headers = (
+        {"Content-Type": "application/x-www-form-urlencoded"}
+        if body is not None
+        else {}
+    )
     if headers:
         request_headers.update(headers)
     conn.request(method, target, body=body, headers=request_headers)
@@ -50,13 +58,37 @@ def request_once(
     return response.status, response_headers, response_body
 
 
+def raw_request_once(store: AuditStore, request: bytes) -> bytes:
+    server = DashboardHTTPServer(
+        ("127.0.0.1", 0), Dashboard(store, csrf_token="test-csrf-token").app()
+    )
+    thread = Thread(target=server.handle_request)
+    thread.start()
+    request = request.replace(b"{PORT}", str(server.server_port).encode())
+    with socket.create_connection(
+        ("127.0.0.1", server.server_port), timeout=5
+    ) as client:
+        client.sendall(request)
+        client.shutdown(socket.SHUT_WR)
+        chunks = []
+        while chunk := client.recv(4096):
+            chunks.append(chunk)
+    thread.join(timeout=5)
+    server.server_close()
+    return b"".join(chunks)
+
+
 def create_pending_approval(store: AuditStore, root: Path) -> tuple[str, int]:
     run_id = store.start_run("review patch", "agent", root / "workspace")
     approval_id = store.create_approval(
         run_id,
         "patch_text",
         {
-            "args": {"path": "math_utils.py", "old": "return a - b", "new": "return a + b"},
+            "args": {
+                "path": "math_utils.py",
+                "old": "return a - b",
+                "new": "return a + b",
+            },
             "request_fingerprint": "abc123",
         },
         "Writes require approval.",
@@ -71,7 +103,9 @@ def write_snapshot(path: Path, files: dict[str, bytes | str]) -> Path:
     return path
 
 
-def add_snapshot_events(store: AuditStore, run_id: str, before: Path, after: Path) -> None:
+def add_snapshot_events(
+    store: AuditStore, run_id: str, before: Path, after: Path
+) -> None:
     store.add_event(run_id, "run_started", "Run started.", {"snapshot": str(before)})
     store.finish_run(run_id, "success", payload={"snapshot": str(after)})
 
@@ -87,6 +121,128 @@ def test_non_loopback_and_wildcard_hosts_are_rejected_before_binding(host):
     assert not is_loopback_host(host)
     with pytest.raises(ValueError, match="loopback"):
         validate_loopback_host(host)
+
+
+def test_loopback_bind_resolution_returns_a_concrete_address():
+    family, address, aliases = _resolve_loopback_bind("localhost")
+    assert family
+    assert is_loopback_host(address)
+    assert {"localhost", address} == aliases
+    with pytest.raises(ValueError, match="loopback"):
+        _resolve_loopback_bind("")
+
+
+def test_dashboard_get_endpoints_and_form_error_paths(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    run_id, approval_id = create_pending_approval(store, tmp_path)
+
+    for target, expected in (
+        ("/", "AgentPermit"),
+        ("/approvals", "Approvals"),
+        (f"/runs/{run_id}", "review patch"),
+        (f"/api/runs/{run_id}", f'"id": "{run_id}"'),
+    ):
+        status, _, body = request_once(store, "GET", target)
+        assert status == 200
+        assert expected in body
+
+    status, _, _ = request_once(store, "GET", "/", headers={"Host": "example.com"})
+    assert status == 403
+    status, _, _ = request_once(store, "POST", "/not-an-approval", form={})
+    assert status == 404
+    status, _, _ = request_once(
+        store,
+        "POST",
+        f"/approvals/{approval_id}/approve",
+        form={"csrf_token": "test-csrf-token"},
+        headers={"Content-Type": "text/plain"},
+    )
+    assert status == 415
+    status, _, _ = request_once(
+        store,
+        "POST",
+        "/approvals/not-an-id/approve",
+        form={"csrf_token": "test-csrf-token"},
+    )
+    assert status == 404
+
+    status, _, body = request_once(
+        store,
+        "POST",
+        f"/approvals/{approval_id}/approve",
+        form={
+            "csrf_token": "test-csrf-token",
+            "reviewer": "x" * 121,
+            "reason": "reviewed",
+        },
+    )
+    assert status == 422
+    assert "exceeds the allowed length" in body
+
+
+@pytest.mark.parametrize(
+    ("content_length", "body", "expected"),
+    [
+        ("invalid", b"", b"Invalid request length"),
+        (str(16 * 1024 + 1), b"", b"Request body is too large"),
+        ("1", b"\xff", b"Request body must be UTF-8"),
+    ],
+)
+def test_dashboard_rejects_invalid_raw_form_bodies(
+    tmp_path, content_length, body, expected
+):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    _, approval_id = create_pending_approval(store, tmp_path)
+    request = (
+        f"POST /approvals/{approval_id}/approve HTTP/1.1\r\n"
+        "Host: 127.0.0.1:{PORT}\r\n"
+        "Content-Type: application/x-www-form-urlencoded\r\n"
+        f"Content-Length: {content_length}\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode() + body
+    assert expected in raw_request_once(store, request)
+
+
+def test_dashboard_returns_conflict_for_already_decided_approval(tmp_path):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    _, approval_id = create_pending_approval(store, tmp_path)
+    store.decide_approval(approval_id, "approved", "first", "already reviewed")
+    status, _, body = request_once(
+        store,
+        "POST",
+        f"/approvals/{approval_id}/approve",
+        form={
+            "csrf_token": "test-csrf-token",
+            "reviewer": "second",
+            "reason": "retry",
+        },
+    )
+    assert status == 409
+    assert "no longer pending" in body
+
+
+def test_serve_configures_authorities_before_serving(tmp_path, monkeypatch):
+    store = AuditStore(tmp_path / "runs.sqlite")
+    calls = []
+
+    class FakeServer:
+        server_port = 8765
+
+        def __init__(self, address, handler):
+            calls.append((address, handler))
+
+        def serve_forever(self):
+            calls.append("served")
+
+    monkeypatch.setattr(web_module, "DashboardHTTPServer", FakeServer)
+    monkeypatch.setattr(
+        web_module,
+        "_resolve_loopback_bind",
+        lambda host: (socket.AF_INET, "127.0.0.1", {host}),
+    )
+    server = web_module.serve(store, "localhost", 8765)
+    assert server.allowed_authorities == {"localhost:8765"}
+    assert calls[-1] == "served"
 
 
 def test_index_links_to_approvals_and_renders_summary(tmp_path):
@@ -128,13 +284,17 @@ def test_approval_post_rejects_missing_or_invalid_csrf_without_mutation(tmp_path
     if csrf is not None:
         form["csrf_token"] = csrf
 
-    status, _, _ = request_once(store, "POST", f"/approvals/{approval_id}/approve", form=form)
+    status, _, _ = request_once(
+        store, "POST", f"/approvals/{approval_id}/approve", form=form
+    )
 
     assert status == 403
     assert store.list_approvals(run_id)[0]["status"] == "pending"
 
 
-@pytest.mark.parametrize("header", [{"Host": "attacker.example"}, {"Origin": "http://attacker.example"}])
+@pytest.mark.parametrize(
+    "header", [{"Host": "attacker.example"}, {"Origin": "http://attacker.example"}]
+)
 def test_approval_post_rejects_foreign_host_authority_before_csrf(tmp_path, header):
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id, approval_id = create_pending_approval(store, tmp_path)
@@ -174,7 +334,9 @@ def test_unknown_approval_post_returns_404_before_form_validation(tmp_path):
     ("field", "value"),
     [("reviewer", ""), ("reviewer", "   "), ("reason", ""), ("reason", "   ")],
 )
-def test_approval_post_requires_reviewer_and_reason_without_mutation(tmp_path, field, value):
+def test_approval_post_requires_reviewer_and_reason_without_mutation(
+    tmp_path, field, value
+):
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id, approval_id = create_pending_approval(store, tmp_path)
     form = {
@@ -184,7 +346,9 @@ def test_approval_post_requires_reviewer_and_reason_without_mutation(tmp_path, f
     }
     form[field] = value
 
-    status, _, body = request_once(store, "POST", f"/approvals/{approval_id}/approve", form=form)
+    status, _, body = request_once(
+        store, "POST", f"/approvals/{approval_id}/approve", form=form
+    )
 
     assert status == 422
     assert "Reviewer and reason are required." in body
@@ -212,7 +376,9 @@ def test_approval_post_persists_reviewer_and_reason_and_escapes_them(tmp_path):
     assert headers["location"] == f"/runs/{run_id}"
     assert approval["status"] == "approved"
     assert approval["approver"] == "Alice <admin>"
-    assert approval["reviewer_reason"] == "Reviewed & accepted <script>alert(1)</script>"
+    assert (
+        approval["reviewer_reason"] == "Reviewed & accepted <script>alert(1)</script>"
+    )
     page = render_run(store, run_id, csrf_token="token")
     assert "Alice &lt;admin&gt;" in page
     assert "Reviewed &amp; accepted &lt;script&gt;alert(1)&lt;/script&gt;" in page
@@ -234,7 +400,12 @@ def test_dashboard_returns_404_for_unknown_run_api_and_extra_segments(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id = store.start_run("trace", "agent", tmp_path / "workspace")
 
-    for target in ("/missing", "/runs/unknown", "/api/runs/unknown", f"/runs/{run_id}/extra"):
+    for target in (
+        "/missing",
+        "/runs/unknown",
+        "/api/runs/unknown",
+        f"/runs/{run_id}/extra",
+    ):
         status, _, _ = request_once(store, "GET", target)
         assert status == 404
 
@@ -265,7 +436,11 @@ def test_snapshot_diff_reports_created_modified_deleted_and_unchanged_once(tmp_p
 
     assert result.available
     assert result.counts == {"created": 1, "modified": 1, "deleted": 1, "unchanged": 1}
-    assert [entry.path for entry in result.entries] == ["created.txt", "deleted.txt", "modified.txt"]
+    assert [entry.path for entry in result.entries] == [
+        "created.txt",
+        "deleted.txt",
+        "modified.txt",
+    ]
     assert [entry.path for entry in result.entries].count("modified.txt") == 1
     assert "-old" in result.entries[2].diff
     assert "+new" in result.entries[2].diff
@@ -296,7 +471,9 @@ def test_snapshot_diff_renders_binary_and_oversized_files_as_metadata(tmp_path):
     assert entries["large.txt"].after_size == 100
 
 
-def test_snapshot_diff_fails_closed_for_missing_corrupt_and_excessive_archives(tmp_path):
+def test_snapshot_diff_fails_closed_for_missing_corrupt_and_excessive_archives(
+    tmp_path,
+):
     valid = write_snapshot(tmp_path / "valid.zip", {"a.txt": "a"})
     corrupt = tmp_path / "corrupt.zip"
     corrupt.write_bytes(b"not a zip")
@@ -305,19 +482,26 @@ def test_snapshot_diff_fails_closed_for_missing_corrupt_and_excessive_archives(t
     missing_result = compare_snapshot_archives(tmp_path / "missing.zip", valid)
     corrupt_result = compare_snapshot_archives(corrupt, valid)
     excessive_result = compare_snapshot_archives(
-        valid, excessive, limits=DiffLimits(max_files=1, max_total_bytes=1024, max_text_bytes=32)
+        valid,
+        excessive,
+        limits=DiffLimits(max_files=1, max_total_bytes=1024, max_text_bytes=32),
     )
 
     assert not missing_result.available and missing_result.reason == "snapshot_missing"
     assert not corrupt_result.available and corrupt_result.reason == "snapshot_invalid"
-    assert not excessive_result.available and excessive_result.reason == "snapshot_limits_exceeded"
+    assert (
+        not excessive_result.available
+        and excessive_result.reason == "snapshot_limits_exceeded"
+    )
 
 
 @pytest.mark.parametrize(
     ("before_text", "after_text"),
     [("same\n", "same"), ("same\r\n", "same\n")],
 )
-def test_snapshot_diff_renders_newline_only_changes_as_human_readable(tmp_path, before_text, after_text):
+def test_snapshot_diff_renders_newline_only_changes_as_human_readable(
+    tmp_path, before_text, after_text
+):
     before = write_snapshot(tmp_path / "before.zip", {"same.txt": before_text})
     after = write_snapshot(tmp_path / "after.zip", {"same.txt": after_text})
 
@@ -391,7 +575,9 @@ def test_run_page_uses_event_referenced_snapshots_and_shows_diff_metrics(tmp_pat
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id = store.start_run("diff", "agent", tmp_path / "workspace")
     before = write_snapshot(tmp_path / "actual-before.zip", {"old.txt": "before\n"})
-    after = write_snapshot(tmp_path / "actual-after.zip", {"old.txt": "after\n", "new.txt": "new\n"})
+    after = write_snapshot(
+        tmp_path / "actual-after.zip", {"old.txt": "after\n", "new.txt": "new\n"}
+    )
     add_snapshot_events(store, run_id, before, after)
 
     page = render_run(store, run_id, csrf_token="token")
@@ -407,7 +593,9 @@ def test_run_page_uses_event_referenced_snapshots_and_shows_diff_metrics(tmp_pat
 def test_run_page_shows_structured_unavailable_snapshot_evidence(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id = store.start_run("diff", "agent", tmp_path / "workspace")
-    add_snapshot_events(store, run_id, tmp_path / "missing-before.zip", tmp_path / "missing-after.zip")
+    add_snapshot_events(
+        store, run_id, tmp_path / "missing-before.zip", tmp_path / "missing-after.zip"
+    )
 
     page = render_run(store, run_id, csrf_token="token")
 
@@ -420,7 +608,9 @@ def test_run_page_filters_events_and_uses_native_collapsible_payloads(tmp_path):
     store = AuditStore(tmp_path / "runs.sqlite")
     run_id = store.start_run("trace", "agent", tmp_path / "workspace")
     store.add_event(run_id, "policy_decision", "Allowed.", {"decision": "allow"})
-    store.add_event(run_id, "tool_result", "Completed.", {"ok": True}, tool_name="read_file")
+    store.add_event(
+        run_id, "tool_result", "Completed.", {"ok": True}, tool_name="read_file"
+    )
 
     page = render_run(store, run_id, csrf_token="token", event_type="tool_result")
 

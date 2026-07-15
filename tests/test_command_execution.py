@@ -74,7 +74,9 @@ def test_run_command_preserves_quoted_argument_elements(tmp_path):
     assert result["timed_out"] is False
 
 
-def test_run_command_uses_minimal_environment_without_credentials(tmp_path, monkeypatch):
+def test_run_command_uses_minimal_environment_without_credentials(
+    tmp_path, monkeypatch
+):
     executor, _manager, workspace = make_executor(tmp_path)
     monkeypatch.setenv("AGENTPERMIT_TEST_TOKEN", "credential-must-not-leak")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "credential-must-not-leak")
@@ -129,9 +131,7 @@ def test_owned_read_fd_cannot_close_an_unrelated_reused_descriptor():
         os.close(replacement_write)
 
 
-def test_popen_start_failure_closes_all_executor_owned_pipe_fds(
-    tmp_path, monkeypatch
-):
+def test_popen_start_failure_closes_all_executor_owned_pipe_fds(tmp_path, monkeypatch):
     executor, _manager, workspace = make_executor(tmp_path)
     created_fds = []
     real_pipe = os.pipe
@@ -239,9 +239,7 @@ def test_run_command_timeout_terminates_descendant_process(tmp_path):
 
 
 def test_single_deadline_covers_descendant_that_holds_inherited_pipes(tmp_path):
-    executor, _manager, workspace = make_executor(
-        tmp_path, max_command_seconds=1
-    )
+    executor, _manager, workspace = make_executor(tmp_path, max_command_seconds=1)
     pid_file = workspace / "pipe-child.pid"
     child_code = (
         "import os,pathlib,sys,time; "
@@ -261,9 +259,7 @@ def test_single_deadline_covers_descendant_that_holds_inherited_pipes(tmp_path):
     )
 
     started = time.monotonic()
-    result = run_python(
-        executor, workspace, parent_code, child_code, str(pid_file)
-    )
+    result = run_python(executor, workspace, parent_code, child_code, str(pid_file))
     elapsed = time.monotonic() - started
 
     assert result["timed_out"] is True
@@ -320,9 +316,7 @@ def test_windows_rejects_batch_arguments_that_could_trigger_shell_injection(
     executor, _manager, workspace = make_executor(tmp_path)
     batch = workspace / "unsafe.cmd"
     injected = workspace / "AGENTPERMIT_INJECTED"
-    batch.write_text(
-        f"@echo off\r\necho injected > {injected}\r\n", encoding="utf-8"
-    )
+    batch.write_text(f"@echo off\r\necho injected > {injected}\r\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="batch|script"):
         executor.execute(
@@ -401,7 +395,9 @@ def test_windows_npm_adapters_use_node_and_known_cli_without_reading_shim(
     cli.write_text("// known CLI", encoding="utf-8")
 
     def fake_which(candidate, path=None):
-        return str(shim if candidate == program else node if candidate == "node" else "")
+        return str(
+            shim if candidate == program else node if candidate == "node" else ""
+        )
 
     monkeypatch.setattr("shutil.which", fake_which)
 

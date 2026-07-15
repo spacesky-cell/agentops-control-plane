@@ -17,7 +17,9 @@ def export_json(store: AuditStore, run_id: str, out: str | Path) -> Path:
         "approvals": store.list_approvals(run_id),
     }
     output = Path(out)
-    output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    output.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     return output
 
 
@@ -29,7 +31,9 @@ def export_html(store: AuditStore, run_id: str, out: str | Path) -> Path:
     approvals = store.list_approvals(run_id)
     rows = []
     for event in events:
-        payload = html.escape(json.dumps(event["payload"], ensure_ascii=False, indent=2))
+        payload = html.escape(
+            json.dumps(event["payload"], ensure_ascii=False, indent=2)
+        )
         rows.append(
             "<tr>"
             f"<td>{event['id']}</td>"
@@ -63,19 +67,19 @@ def export_html(store: AuditStore, run_id: str, out: str | Path) -> Path:
 </head>
 <body>
   <h1>AgentPermit Run {html.escape(run_id)}</h1>
-  <p><strong>Task:</strong> {html.escape(run['task'])}</p>
-  <p><strong>Agent:</strong> {html.escape(run['agent_name'])}</p>
-  <p><strong>Status:</strong> <span class="status">{html.escape(run['status'])}</span></p>
-  <p><strong>Workspace:</strong> {html.escape(run['workspace_path'])}</p>
+  <p><strong>Task:</strong> {html.escape(run["task"])}</p>
+  <p><strong>Agent:</strong> {html.escape(run["agent_name"])}</p>
+  <p><strong>Status:</strong> <span class="status">{html.escape(run["status"])}</span></p>
+  <p><strong>Workspace:</strong> {html.escape(run["workspace_path"])}</p>
   <h2>Approvals</h2>
-  <ul>{approval_items or '<li>No approvals</li>'}</ul>
+  <ul>{approval_items or "<li>No approvals</li>"}</ul>
   <h2>Trace Events</h2>
   <table>
     <thead>
       <tr><th>ID</th><th>Time</th><th>Type</th><th>Tool</th><th>Risk</th><th>Message</th></tr>
     </thead>
     <tbody>
-      {''.join(rows)}
+      {"".join(rows)}
     </tbody>
   </table>
 </body>
@@ -84,4 +88,3 @@ def export_html(store: AuditStore, run_id: str, out: str | Path) -> Path:
     output = Path(out)
     output.write_text(document, encoding="utf-8")
     return output
-

@@ -7,7 +7,9 @@ from agentpermit.gateway import RuntimeGateway
 def make_sample_repo(root: Path) -> Path:
     source = root / "sample_repo"
     source.mkdir()
-    (source / "math_utils.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    (source / "math_utils.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
     return source
 
 

@@ -12,7 +12,9 @@ class PolicyEngine:
 
     def evaluate(self, request: ToolRequest, workspace_root: Path) -> PolicyDecision:
         if request.tool_name in {"list_files"}:
-            return PolicyDecision(Decision.ALLOW, Risk.LOW, "Listing files is read-only.")
+            return PolicyDecision(
+                Decision.ALLOW, Risk.LOW, "Listing files is read-only."
+            )
         if request.tool_name == "read_file":
             return self._evaluate_read(request, workspace_root)
         if request.tool_name == "write_file":
@@ -27,40 +29,62 @@ class PolicyEngine:
             f"Unknown tool '{request.tool_name}' requires human approval.",
         )
 
-    def _evaluate_read(self, request: ToolRequest, workspace_root: Path) -> PolicyDecision:
+    def _evaluate_read(
+        self, request: ToolRequest, workspace_root: Path
+    ) -> PolicyDecision:
         relative = str(request.args.get("path", ""))
         if not relative:
             return PolicyDecision(Decision.DENY, Risk.MEDIUM, "Missing file path.")
         if self._is_protected(relative, workspace_root):
-            return PolicyDecision(Decision.DENY, Risk.HIGH, "Protected files cannot be read.")
+            return PolicyDecision(
+                Decision.DENY, Risk.HIGH, "Protected files cannot be read."
+            )
         if not self._is_inside_workspace(relative, workspace_root):
-            return PolicyDecision(Decision.DENY, Risk.HIGH, "Path escapes the workspace.")
-        return PolicyDecision(Decision.ALLOW, Risk.LOW, "Read is allowed inside workspace.")
+            return PolicyDecision(
+                Decision.DENY, Risk.HIGH, "Path escapes the workspace."
+            )
+        return PolicyDecision(
+            Decision.ALLOW, Risk.LOW, "Read is allowed inside workspace."
+        )
 
-    def _evaluate_write(self, request: ToolRequest, workspace_root: Path) -> PolicyDecision:
+    def _evaluate_write(
+        self, request: ToolRequest, workspace_root: Path
+    ) -> PolicyDecision:
         relative = str(request.args.get("path", ""))
         if not relative:
             return PolicyDecision(Decision.DENY, Risk.MEDIUM, "Missing file path.")
         if self._is_protected(relative, workspace_root):
-            return PolicyDecision(Decision.DENY, Risk.CRITICAL, "Protected files cannot be written.")
+            return PolicyDecision(
+                Decision.DENY, Risk.CRITICAL, "Protected files cannot be written."
+            )
         if not self._is_inside_workspace(relative, workspace_root):
-            return PolicyDecision(Decision.DENY, Risk.CRITICAL, "Path escapes the workspace.")
+            return PolicyDecision(
+                Decision.DENY, Risk.CRITICAL, "Path escapes the workspace."
+            )
         if self.config.write_requires_approval:
             return PolicyDecision(
                 Decision.REQUIRE_APPROVAL,
                 Risk.MEDIUM,
                 "File writes require approval by policy.",
             )
-        return PolicyDecision(Decision.ALLOW, Risk.MEDIUM, "File write allowed by policy.")
+        return PolicyDecision(
+            Decision.ALLOW, Risk.MEDIUM, "File write allowed by policy."
+        )
 
-    def _evaluate_patch(self, request: ToolRequest, workspace_root: Path) -> PolicyDecision:
+    def _evaluate_patch(
+        self, request: ToolRequest, workspace_root: Path
+    ) -> PolicyDecision:
         relative = str(request.args.get("path", ""))
         if not relative:
             return PolicyDecision(Decision.DENY, Risk.MEDIUM, "Missing file path.")
         if self._is_protected(relative, workspace_root):
-            return PolicyDecision(Decision.DENY, Risk.CRITICAL, "Protected files cannot be patched.")
+            return PolicyDecision(
+                Decision.DENY, Risk.CRITICAL, "Protected files cannot be patched."
+            )
         if not self._is_inside_workspace(relative, workspace_root):
-            return PolicyDecision(Decision.DENY, Risk.CRITICAL, "Path escapes the workspace.")
+            return PolicyDecision(
+                Decision.DENY, Risk.CRITICAL, "Path escapes the workspace."
+            )
         if self.config.patch_requires_approval:
             return PolicyDecision(
                 Decision.REQUIRE_APPROVAL,
@@ -83,14 +107,18 @@ class PolicyEngine:
                 )
         for prefix in self.config.command_allow_prefixes:
             if argv[: len(prefix)] == prefix:
-                return PolicyDecision(Decision.ALLOW, Risk.LOW, "Command matches allowlist.")
+                return PolicyDecision(
+                    Decision.ALLOW, Risk.LOW, "Command matches allowlist."
+                )
         if self.config.unknown_command_requires_approval:
             return PolicyDecision(
                 Decision.REQUIRE_APPROVAL,
                 Risk.HIGH,
                 "Command is not allowlisted and requires approval.",
             )
-        return PolicyDecision(Decision.ALLOW, Risk.HIGH, "Unknown command allowed by policy.")
+        return PolicyDecision(
+            Decision.ALLOW, Risk.HIGH, "Unknown command allowed by policy."
+        )
 
     def _is_inside_workspace(self, relative: str, workspace_root: Path) -> bool:
         candidate = (workspace_root / relative).resolve()
@@ -111,4 +139,3 @@ class PolicyEngine:
         except ValueError:
             return False
         return is_protected_path(resolved_relative, self.config.protected_globs)
-

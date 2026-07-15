@@ -27,7 +27,9 @@ class RuntimeGateway:
         self.tool_executor = tool_executor
 
     @classmethod
-    def from_home(cls, home: str | Path, config: PolicyConfig | None = None) -> "RuntimeGateway":
+    def from_home(
+        cls, home: str | Path, config: PolicyConfig | None = None
+    ) -> "RuntimeGateway":
         root = Path(home)
         agentpermit_dir = root / ".agentpermit"
         policy_config = config or PolicyConfig()
@@ -39,7 +41,9 @@ class RuntimeGateway:
             tool_executor=ToolExecutor(workspace_manager, policy_config),
         )
 
-    def start_run(self, task: str, agent_name: str, source: str | Path | None = None) -> tuple[str, Path]:
+    def start_run(
+        self, task: str, agent_name: str, source: str | Path | None = None
+    ) -> tuple[str, Path]:
         run_id = self.audit_store.start_run(task, agent_name)
         workspace: Path | None = None
         identity: tuple[int, int] | None = None
@@ -119,7 +123,9 @@ class RuntimeGateway:
             decision.risk.value,
         )
         if decision.decision == Decision.DENY:
-            return ToolResult(ToolStatus.DENIED, error=decision.reason, decision=decision)
+            return ToolResult(
+                ToolStatus.DENIED, error=decision.reason, decision=decision
+            )
         if decision.decision == Decision.REQUIRE_APPROVAL:
             resolution = self.audit_store.resolve_approval(
                 run_id,
@@ -149,7 +155,9 @@ class RuntimeGateway:
                     approval_id=resolution.approval_id,
                 )
             if resolution.state == "pending":
-                event_type = "approval_requested" if resolution.created else "approval_pending"
+                event_type = (
+                    "approval_requested" if resolution.created else "approval_pending"
+                )
                 self.audit_store.add_event(
                     run_id,
                     event_type,
@@ -187,7 +195,9 @@ class RuntimeGateway:
                     decision.risk.value,
                 )
         try:
-            output = self.tool_executor.execute(workspace, request.tool_name, request.args)
+            output = self.tool_executor.execute(
+                workspace, request.tool_name, request.args
+            )
         except Exception as exc:  # noqa: BLE001 - audit boundary should capture tool exceptions.
             self.audit_store.add_event(
                 run_id,
@@ -236,5 +246,7 @@ class RuntimeGateway:
             "tool_name": request.tool_name,
             "args": request.args,
         }
-        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        encoded = json.dumps(
+            payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
